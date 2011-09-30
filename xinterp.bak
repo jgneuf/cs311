@@ -97,53 +97,12 @@
 (define (pre-process expr)
   '...)
 
-;; subst : WAE symbol WAE -> WAE
-;; Substitute second arg with third arg in first arg such that
-;; the resulting WAE has no free instances of second arg. For the
-;; most part, this code is from the PLAI text and has been slightly
-;; modified to suit my needs.
-(define (subst expr sub-id val)
-  (type-case WAE expr
-    [num (n) expr]
-    
-    ;; Retain abstract syntax for binops while substituting in WAEs.
-    [binop (o l r)
-           (make-binop
-            o
-            (subst l sub-id val)
-            (subst r sub-id val))]
-    
-    ;; Substitution algorithm given in PLAI text. Implementation
-    ;; specific details have been altered for my own use.
-    [with (binds body)
-          (if (symbol=? (binding-name binds) sub-id)
-              (make-with (make-binding (binding-name binds)
-                                       (subst (binding-named-expr binds)
-                                              sub-id
-                                              val))
-                         body)
-              (make-with (make-binding (binding-name binds)
-                                       (subst (binding-named-expr binds)
-                                              sub-id
-                                              val))
-                         (subst body sub-id val)) )]
-    [with* (lob body) '()]
-    [id (v) (if (symbol=? v sub-id) val expr)] ))
-
 ;; interp : CFWAE -> CFWAE-Value
 ;; This procedure interprets the given CFWAE and produces a result 
 ;; in the form of a CFWAE-Value (either a closureV, thunkV, or numV).
 ;; (Assumes the input was successfully produced by pre-process.)
 (define (interp expr)
-  (type-case WAE expr
-    [num (n) n]
-    [binop (o l r) (o (interp l) (interp r))]
-    [with (binds body)
-          (interp (subst body
-                         (binding-name binds)
-                         (num (interp (binding-named-expr binds)))))]
-    [with* (lob body) body]
-    [id (v) v] ))
+  '...)
 
 ;; run : sexp -> CFWAE-Value
 ;; Consumes an sexp and passes it through parsing, pre-processing,
@@ -200,60 +159,3 @@
 ;      (parse '{fun {x} {+ {if0 0 {+ 2 1} 3} x}}))
 
 
-;; -------------------------------------------------------------------------
-;; Unit testing.
-;; -------------------------------------------------------------------------
-;; Helper function tests
-;; is-binop tests
-(test (is-binop '+) true)
-(test (is-binop '/) true)
-(test (is-binop '^) false)
-
-;; get-procedure tests
-(test (get-procedure '+) +)
-(test (get-procedure '*) *)
-
-;; is-with tests
-(test (is-with (first '(with x 5))) true)
-(test (is-with 'binop) false)
-
-;; parser tests
-"simple parse tests"
-(test (parse '1) (num 1))
-(test (parse 'x) (id 'x))
-(test (parse '{+ 1 1}) (binop + (num 1) (num 1)))
-(test (parse '{with {x 1} x}) (with (binding 'x (num 1)) (id 'x)))
-(test (parse '{with {x 1} {with {x 2} x}}) 
-      (with (binding 'x (num 1)) (with (binding 'x (num 2)) (id 'x))))
-(test (parse '{with {x 10} {with {y 5} {* {+ x x} {/ x y}}}}) 
-      (with
-       (binding 'x (num 10))
-       (with
-        (binding 'y (num 5))
-        (binop
-         *
-         (binop + (id 'x) (id 'x))
-         (binop / (id 'x) (id 'y))))))
-
-;; interpreter tests
-"simple interp tests"
-(test (interp (num 1)) 1)
-(test (interp (id 'x)) 'x)
-(test (interp (binop + (num 1) (num 1))) 2)
-(test (interp (binop + (binop - (num 10) (num 5))
-                     (binop * (num -1) (num -5)))) 10)
-(test (interp (num 100)) 100)
-(test (interp (parse '{+ 1 2})) 3)
-(test (interp (parse '{with {x 1} x})) 1)
-
-;; full interp texts from plai
-"interp with from PLAI"
-(test (interp (parse '{with {x {+ 5 5}} {+ x x}})) 20)
-(test (interp (parse '{with {x 5} {+ x x}})) 10)
-(test (interp (parse '{with {x {+ 5 5}} {with {y {- x 3}} {+ y y}}})) 14)
-(test (interp (parse '{with {x 5} {with {y {- x 3}} {+ y y}}})) 4)
-(test (interp (parse '{with {x 5} {+ x {with {x 3} 10}}})) 15)
-(test (interp (parse '{with {x 5} {+ x {with {x 3} x}}})) 8)
-(test (interp (parse '{with {x 5} {+ x {with {y 3} x}}})) 10)
-(test (interp (parse '{with {x 5} {with {y x} y}})) 5)
-(test (interp (parse '{with {x 5} {with {x x} x}})) 5)
