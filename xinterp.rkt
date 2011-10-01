@@ -14,22 +14,32 @@
 ;; BNF of CFWAE.
 (define-type CFWAE
   [num (n number?)]
-  [binop (op procedure?) (lhs CFWAE?) (rhs CFWAE?)]
-  [with (b Binding?) (body CFWAE?)]
+  [binop (op procedure?) 
+         (lhs CFWAE?) 
+         (rhs CFWAE?)]
+  [with (b Binding?) 
+        (body CFWAE?)]
   [id (name symbol?)]
-  [if0 (c CFWAE?) (t CFWAE?) (e CFWAE?)]
-  [fun (args (listof symbol?)) (body CFWAE?)]
-  [app (f CFWAE?) (args (listof CFWAE?))])
+  [if0 (c CFWAE?) 
+       (t CFWAE?) 
+       (e CFWAE?)]
+  [fun (args (listof symbol?)) 
+       (body CFWAE?)]
+  [app (f CFWAE?) 
+       (args (listof CFWAE?))])
 
 ;; Definition of an environment. It's either empty, or not :).
 (define-type Env
   [mtEnv]
-  [anEnv (name symbol?) (value CFWAE-Value?) (env Env?)])
+  [anEnv (name symbol?) 
+         (value CFWAE-Value?) 
+         (env Env?)])
 
 ;; A CFWAE-Value.
 (define-type CFWAE-Value
   [numV (n number?)]
-  [thunkV (body CFWAE?) (env Env?)]
+  [thunkV (body CFWAE?) 
+          (env Env?)]
   [closureV (param symbol?)
             (body CFWAE?)
             (env Env?)])
@@ -95,16 +105,19 @@
      (cond
        ;; Create binop by grabbing correct procedure from binops
        ;; and parsing the operands.
-       [(is-binop (first sexp)) 
-        (make-binop (get-procedure (first sexp))
-                    (parse (second sexp))
-                    (parse (third sexp)))]
+       [(is-binop (first sexp))
+        (local ([define proc (get-procedure (first sexp))]
+                [define lhs (second sexp)]
+                [define rhs (third sexp)])
+          (make-binop proc (parse lhs) (parse rhs)) )]
        
        ;; Create with by making binding and parsing body.
        [(is-with (first sexp))
-        (make-with (make-binding (first (second sexp))
-                                 (parse (second (second sexp))))
-                   (parse (third sexp)))] 
+        (local ([define id (first (second sexp))]
+                [define named-expr (second (second sexp))]
+                [define body (third sexp)])
+          (with (make-binding id (parse named-expr))
+                (parse body)) )]
        
        ;; Create if0 by parsing each element of the expression
        [(is-if0 (first sexp))
@@ -116,15 +129,14 @@
        
        ;; Create function definition by parsing arguments and body.
        [(is-fun (first sexp))
-        (make-fun
-         (second sexp)
-         (parse (third sexp)))]
+        (local ([define args (second sexp)]
+                [define body (third sexp)])
+          (make-fun args (parse body)) )]
        
        ;; Must be a function application. Parse function and arguments.
        [else (local ([define f (parse (first sexp))]
                      [define args (map parse (rest sexp))])
                (make-app f args))] )]
-    
     
     ;; If it's nothing else, it's an id.
     [else (id sexp)] ))
@@ -148,11 +160,25 @@
     ;; nested functions. Some sort of currying thingy.
     [(fun? expr)
      (if (> (length (fun-args expr)) 1)
-         (make-fun (list (first (fun-args expr)))
-                   (pre-process
-                    (make-fun (rest (fun-args expr))
-                              (fun-body expr))))
+         ;; Function has more than one argument, transform it:
+         (local ([define first-arg (first (fun-args expr))]
+                 [define other-args (rest (fun-args expr))]
+                 [define body (fun-body expr)])
+           (make-fun (list first-arg)
+                     (pre-process (make-fun other-args
+                                            body))))
+         ;; Just one (or zero) arguments, leave it as is:
          expr)]
+    
+    ;; Function applications of more then one argument are transformed
+    ;; into nested applications of a single argument, like functions.
+    [(app? expr)
+     (if (> (length (app-args expr)))
+         'nested-app
+         expr)]
+    
+    ;; pre-process only checks with, fun and app. Otherwise we don't
+    ;; preprocess it.
     [else expr] ))
 
 ;; subst : WAE symbol WAE -> WAE
@@ -226,7 +252,6 @@
 ;; and then interpretation to produce a result.
 (define (run sexp)
   (interp (pre-process (parse sexp))))
-
 
 ;; Possibly useful additional functions:
 
@@ -334,15 +359,23 @@
       (fun '(x y z) (binop * (id 'z) (binop + (id 'x) (id 'y)))))
 (test (parse '(x y)) (app (id 'x) (list (id 'y))))
 (test (parse '(x y z j k)) (app (id 'x) (list (id 'y) (id 'z) (id 'j) (id 'k))))
+(test (parse '{with {double {fun {x} {+ x x}}} {double 10}})
+      (with (binding 'double (fun '(x) (binop + (id 'x) (id 'x)))) 
+            (app (id 'double) (list (num 10)))))
+(test (parse '{with {target 20} {with {inc-by-target {fun {x} {+ x target}}} {inc-by-target 10}}})
+      (with (binding 'target (num 20)) 
+            (with (binding 'inc-by-target (fun '(x) 
+                                               (binop + (id 'x) (id 'target))))
+                  (app (id 'inc-by-target) (list (num 10))))))
 
 ;; pre-process tests
 "pre-process tests"
-(test (pre-process (parse '(x y z j k))) (app (id 'x) (list (id 'y) (id 'z) (id 'j) (id 'k))))
+(test (pre-process (parse '(x y z j k))) '...)
 (test (pre-process (parse '{fun {x} {+ 1 x}})) (fun '(x) (binop + (num 1) (id 'x))))
 (test (pre-process (parse '{if0 0 x y})) (if0 (num 0) (id 'x) (id 'y)))
 (test (pre-process (parse '{with {x 1} x})) (app (fun '(x) (id 'x)) (list (num 1))))
 (test (pre-process (parse '{with {x 2} {* 2 x}}))
-                    (app (fun '(x) (binop * (num 2) (id 'x))) (list (num 2))))
+      (app (fun '(x) (binop * (num 2) (id 'x))) (list (num 2))))
 (test (pre-process (parse '{fun {x y} {+ x y}})) 
       (fun '(x) (fun '(y) (binop + (id 'x) (id 'y)))))
 (test (pre-process (parse '(fun (x y z) (+ x (* y z)))))
