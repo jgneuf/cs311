@@ -58,9 +58,27 @@
 
 ;; is-with : symbol -> boolean
 ;; Consumes a symbol from parse and returns true if the symbol indicates
-;; the sexp in parse is a with WAE.
+;; the sexp in parse is a with.
 (define (is-with sym)
   (if (symbol=? sym 'with) true false))
+
+;; is-if0 : symbol -> boolean
+;; Consumes a symbol from parse and returns true if the symbol indicates
+;; the sexp in parse is an if0.
+(define (is-if0 sym)
+  (if (symbol=? sym 'if0) true false))
+
+;; is-fun : symbol -> boolean
+;; Consumes a symbol from parse and returns true if the symbol indicates
+;; the sexp in parse is a fun.
+(define (is-fun sym)
+  (if (symbol=? sym 'fun) true false))
+
+;; is-app : symbol -> boolean
+;; Consumes a symbol from parse and returns true if the symbol indicates
+;; the sexp in parse is an app.
+(define (is-app sym)
+  (if (symbol=? sym 'app) true false))
 
 ;; -------------------------------------------------------------------------
 ;; Main functions.
@@ -71,7 +89,6 @@
   (cond
     ;; Numbers and symbols are trivial.
     [(number? sexp) (num sexp)]
-    [(symbol? sexp) (id sexp)]
     
     ;; A ist can be a variety of things, find out what it is.
     [(list? sexp)
@@ -87,7 +104,30 @@
        [(is-with (first sexp))
         (make-with (make-binding (first (second sexp))
                                  (parse (second (second sexp))))
-                   (parse (third sexp)))] )] ))
+                   (parse (third sexp)))] 
+       
+       ;; Create if0 by parsing each element of the expression
+       [(is-if0 (first sexp))
+        (local 
+          ([define c (parse (second sexp))]
+           [define t (parse (third sexp))]
+           [define e (parse (fourth sexp))])
+          (make-if0 c t e)) ]
+       
+       ;; Create function definition by parsing arguments and body.
+       [(is-fun (first sexp))
+        (make-fun
+         (second sexp)
+         (parse (third sexp)))]
+       
+       ;; Must be a function application. Parse function and arguments.
+       [else (local ([define f (parse (first sexp))]
+                     [define args (map parse (rest sexp))])
+               (make-app f args))] )]
+    
+    
+    ;; If it's nothing else, it's an id.
+    [else (id sexp)] ))
 
 ;; pre-process : CFWAE -> CFWAE
 ;; Consumes a CFWAE and constructs a corresponding CFWAE without
@@ -95,7 +135,25 @@
 ;; and with no functions or applications of more than one argument.
 ;; (Assumes the input was successfully produced by parse.)
 (define (pre-process expr)
-  '...)
+  (cond
+    ;; Remove with from AST by constructing an equivilant function
+    ;; application.
+    [(with? expr)
+     (local ([define f-arg (binding-name (with-b expr))]
+             [define f-body (with-body expr)]
+             [define app-args (binding-named-expr (with-b expr))])
+       (make-app (make-fun (list f-arg) f-body) (list app-args)))]
+    
+    ;; Functions of more than one argument are transformed into
+    ;; nested functions. Some sort of currying thingy.
+    [(fun? expr)
+     (if (> (length (fun-args expr)) 1)
+         (make-fun (list (first (fun-args expr)))
+                   (pre-process
+                    (make-fun (rest (fun-args expr))
+                              (fun-body expr))))
+         expr)]
+    [else expr] ))
 
 ;; subst : WAE symbol WAE -> WAE
 ;; Substitute second arg with third arg in first arg such that
@@ -103,7 +161,7 @@
 ;; most part, this code is from the PLAI text and has been slightly
 ;; modified to suit my needs.
 (define (subst expr sub-id val)
-  (type-case WAE expr
+  (type-case CFWAE expr
     [num (n) expr]
     
     ;; Retain abstract syntax for binops while substituting in WAEs.
@@ -127,23 +185,41 @@
                                               sub-id
                                               val))
                          (subst body sub-id val)) )]
-    [with* (lob body) '()]
-    [id (v) (if (symbol=? v sub-id) val expr)] ))
+    
+    ;; Return correct binding value.
+    [id (v) (if (symbol=? v sub-id) val expr)]
+    
+    ;; TODO: subst f0
+    [if0 (c t e) '...]
+    
+    ;; TODO: subst fun
+    [fun (args body) '...]
+    
+    ;; TODO: subst app
+    [app (f args) '...] ))
 
 ;; interp : CFWAE -> CFWAE-Value
 ;; This procedure interprets the given CFWAE and produces a result 
 ;; in the form of a CFWAE-Value (either a closureV, thunkV, or numV).
 ;; (Assumes the input was successfully produced by pre-process.)
 (define (interp expr)
-  (type-case WAE expr
+  (type-case CFWAE expr
     [num (n) n]
     [binop (o l r) (o (interp l) (interp r))]
     [with (binds body)
           (interp (subst body
                          (binding-name binds)
                          (num (interp (binding-named-expr binds)))))]
-    [with* (lob body) body]
-    [id (v) v] ))
+    [id (v) v]
+    
+    ;; TODO: interp if0
+    [if0 (c t e) '...]
+    
+    ;; TODO: interp fun
+    [fun (args body) '...]
+    
+    ;; TODO: interp app
+    [app (f args) '...] ))
 
 ;; run : sexp -> CFWAE-Value
 ;; Consumes an sexp and passes it through parsing, pre-processing,
@@ -217,6 +293,18 @@
 (test (is-with (first '(with x 5))) true)
 (test (is-with 'binop) false)
 
+;; is-if0 tests
+(test (is-if0 (first '(if0 0 'x 'y))) true)
+(test (is-if0 (first '(+ 5 1))) false)
+
+;; is-fun tests
+(test (is-fun (first '(fun {x} (+ x 1)))) true)
+(test (is-fun (first '(with x 5))) false)
+
+;; is-app tests
+(test (is-app (first '(app (fun {x} (+ x 1)) {1}))) true)
+(test (is-app (first '(if0 0 'x 'y))) false)
+
 ;; parser tests
 "simple parse tests"
 (test (parse '1) (num 1))
@@ -234,6 +322,31 @@
          *
          (binop + (id 'x) (id 'x))
          (binop / (id 'x) (id 'y))))))
+(test (parse '{if0 0 x y}) (if0 (num 0) (id 'x) (id 'y)))
+(test (parse '(if0 (+ 2 0) true false))
+      (if0 (binop + (num 2) (num 0)) (id 'true) (id 'false)))
+(test (parse '(if0 (with (x 5) {* 0 x}) x (+ a b)))
+      (if0 (with (binding 'x (num 5)) (binop * (num 0) (id 'x)))
+           (id 'x)
+           (binop + (id 'a) (id 'b))))
+(test (parse '{fun {x} {+ 1 x}}) (fun '(x) (binop + (num 1) (id 'x))))
+(test (parse '{fun {x y z} {* z {+ x y}}}) 
+      (fun '(x y z) (binop * (id 'z) (binop + (id 'x) (id 'y)))))
+(test (parse '(x y)) (app (id 'x) (list (id 'y))))
+(test (parse '(x y z j k)) (app (id 'x) (list (id 'y) (id 'z) (id 'j) (id 'k))))
+
+;; pre-process tests
+"pre-process tests"
+(test (pre-process (parse '(x y z j k))) (app (id 'x) (list (id 'y) (id 'z) (id 'j) (id 'k))))
+(test (pre-process (parse '{fun {x} {+ 1 x}})) (fun '(x) (binop + (num 1) (id 'x))))
+(test (pre-process (parse '{if0 0 x y})) (if0 (num 0) (id 'x) (id 'y)))
+(test (pre-process (parse '{with {x 1} x})) (app (fun '(x) (id 'x)) (list (num 1))))
+(test (pre-process (parse '{with {x 2} {* 2 x}}))
+                    (app (fun '(x) (binop * (num 2) (id 'x))) (list (num 2))))
+(test (pre-process (parse '{fun {x y} {+ x y}})) 
+      (fun '(x) (fun '(y) (binop + (id 'x) (id 'y)))))
+(test (pre-process (parse '(fun (x y z) (+ x (* y z)))))
+      (fun '(x) (fun '(y) (fun '(z) (binop + (id 'x) (binop * (id 'y) (id 'z)))))))
 
 ;; interpreter tests
 "simple interp tests"
@@ -257,3 +370,7 @@
 (test (interp (parse '{with {x 5} {+ x {with {y 3} x}}})) 10)
 (test (interp (parse '{with {x 5} {with {y x} y}})) 5)
 (test (interp (parse '{with {x 5} {with {x x} x}})) 5)
+
+;; print out failed tests explicity
+"tests failed:"
+(failed-tests)
