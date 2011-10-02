@@ -95,6 +95,7 @@
 ;; ERROR if the symbol is undefined.
 ;; NOTE: where the symbol is bound multiple times, returns the value
 ;; of the binding that is outermost in the Env object.
+;; NOTE: This code was given in lecture notes, I did not write it
 (define (lookup-env env target-name)
   (type-case Env env
     [mtEnv () (error 'lookup-env "Unbound identifier ~a" target-name)]
@@ -161,6 +162,13 @@
 ;; (Assumes the input was successfully produced by parse.)
 (define (pre-process expr)
   (cond
+    ;; Make sure to pre-process a binops left and right operands.
+    [(binop? expr)
+     (local ([define o (binop-op expr)]
+             (define l (binop-lhs expr))
+             (define r (binop-rhs expr)))
+       (binop o (pre-process l) (pre-process r)))]
+    
     ;; Remove with from AST by constructing an equivilant function
     ;; application.
     [(with? expr)
@@ -223,14 +231,12 @@
         
         ;; Binops result to numVs.
         [binop (o l r) (numV (o 
-                              (numV-n (interp l)) 
-                              (numV-n (interp r))))]
+                              (numV-n (interp-env env l)) 
+                              (numV-n (interp-env env r))))]
         
-        ;; No substitution, just use the environment for that.
+        ;; The AST given to interp should never contain a with.
         [with (binds body)
-              (local ([define val (interp-env env (binding-named-expr (with-b expr)))]
-                      [define id (binding-name (with-b expr))])
-                (interp-env (anEnv id val env) body))]
+              (error 'interp-env "Error: encountered 'with'")]
         
         ;; Look up any identifier in the current environment.
         [id (name) (lookup-env env name)]
@@ -367,15 +373,19 @@
       (if0 (with (binding 'x (num 5)) (binop * (num 0) (id 'x)))
            (id 'x)
            (binop + (id 'a) (id 'b))))
-(test (parse '{fun {x} {+ 1 x}}) (fun '(x) (binop + (num 1) (id 'x))))
+(test (parse '{fun {x} {+ 1 x}}) (fun '(x) 
+                                      (binop + (num 1) (id 'x))))
 (test (parse '{fun {x y z} {* z {+ x y}}}) 
       (fun '(x y z) (binop * (id 'z) (binop + (id 'x) (id 'y)))))
 (test (parse '(x y)) (app (id 'x) (list (id 'y))))
-(test (parse '(x y z j k)) (app (id 'x) (list (id 'y) (id 'z) (id 'j) (id 'k))))
+(test (parse '(x y z j k)) (app (id 'x) 
+                                (list (id 'y) (id 'z) (id 'j) (id 'k))))
 (test (parse '{with {double {fun {x} {+ x x}}} {double 10}})
-      (with (binding 'double (fun '(x) (binop + (id 'x) (id 'x)))) 
+      (with (binding 'double (fun '(x) 
+                                  (binop + (id 'x) (id 'x)))) 
             (app (id 'double) (list (num 10)))))
-(test (parse '{with {target 20} {with {inc-by-target {fun {x} {+ x target}}} {inc-by-target 10}}})
+(test (parse '{with {target 20} {with {inc-by-target 
+                                       {fun {x} {+ x target}}} {inc-by-target 10}}})
       (with (binding 'target (num 20)) 
             (with (binding 'inc-by-target (fun '(x) 
                                                (binop + (id 'x) (id 'target))))
@@ -384,10 +394,14 @@
 ;; pre-process tests
 "pre-process tests"
 (test (pre-process (parse '(x y z j k)))
-      (app (app (app (app (id 'x) (list (id 'y))) (list (id 'z))) (list (id 'j))) (list (id 'k))))
-(test (pre-process (parse '{fun {x} {+ 1 x}})) (fun '(x) (binop + (num 1) (id 'x))))
-(test (pre-process (parse '{if0 0 x y})) (if0 (num 0) (id 'x) (id 'y)))
-(test (pre-process (parse '{with {x 1} x})) (app (fun '(x) (id 'x)) (list (num 1))))
+      (app (app (app (app (id 'x) (list (id 'y))) 
+                     (list (id 'z))) (list (id 'j))) (list (id 'k))))
+(test (pre-process (parse '{fun {x} {+ 1 x}})) 
+      (fun '(x) (binop + (num 1) (id 'x))))
+(test (pre-process (parse '{if0 0 x y})) 
+      (if0 (num 0) (id 'x) (id 'y)))
+(test (pre-process (parse '{with {x 1} x})) 
+      (app (fun '(x) (id 'x)) (list (num 1))))
 (test (pre-process (parse '{with {x 2} {* 2 x}}))
       (app (fun '(x) (binop * (num 2) (id 'x))) (list (num 2))))
 (test (pre-process (parse '{fun {x y} {+ x y}})) 
@@ -403,17 +417,10 @@
            (list (num 20))))
 
 
-;; interpreter tests
-"interp/run tests"
-(test (run '1) (numV 1))
-(test (run '{+ 1 1}) (numV 2))
-(test (run '{+ {* 10 2} {/ 20 2}}) (numV 30))
-(test (run '{with {x 1} x}) (numV 1))
-
 ;; full interp texts from plai
 "interp with from PLAI"
-(test (run '{with {x {+ 5 5}} {+ x x}}) (numV 20))
 (test (run '{with {x 5} {+ x x}}) (numV 10))
+(test (run '{with {x {+ 5 5}} {+ x x}}) (numV 20))
 (test (run '{with {x {+ 5 5}} {with {y {- x 3}} {+ y y}}}) (numV 14))
 (test (run '{with {x 5} {with {y {- x 3}} {+ y y}}}) (numV 4))
 (test (run '{with {x 5} {+ x {with {x 3} 10}}}) (numV 15))
@@ -421,6 +428,44 @@
 (test (run '{with {x 5} {+ x {with {y 3} x}}}) (numV 10))
 (test (run '{with {x 5} {with {y x} y}}) (numV 5))
 (test (run '{with {x 5} {with {x x} x}}) (numV 5))
+
+;; interpreter/run tests
+"interp/run tests"
+(test (run '1) (numV 1))
+(test (run '{+ 1 1}) (numV 2))
+(test (run '{+ {* 10 2} {/ 20 2}}) (numV 30))
+(test (run '{with {x 1} x}) (numV 1))
+(test (run '{with {double {fun {x} {+ x x}}}
+                  {double 10}}) (numV 20))
+
+(test (run '{with {x 1} 2}) (numV 2))
+(test (run '{with {x {+ 1 2}} 2}) (numV 2))
+(test (run '{with {x 1} {with {x 2} x}}) (numV 2))
+(test (run '{with {x 1} {with {y 2} x}}) (numV 1))
+(test (run '{with {x 1} {with {x {+ x 1}} x}}) (numV 2))
+(test (run '{with {x 1} {with {y {+ x 1}} {+ x y}}}) (numV 3))
+
+
+(test (run '{with {target 5}
+                  {with {inc-by-target {fun {x} {+ x target}}}
+                        {inc-by-target 6}}}) (numV 11))
+(test (run '{with {inc-by-target 
+                   {with {target 25} {fun {x} {+ x target}}}}
+                  {inc-by-target 2}}) (numV 27))
+(test/exn (run '{with {f {fun {x} y}}
+                      {with {y 10}
+                            {f 0}}}) "")
+(test (run '{with {target 3}
+                            {with {inc-by-target {fun {x} {+ x target}}}
+                                  {with {target 10000}
+                                        {inc-by-target 3}}}}) (numV 6))
+(test/exn (run '{with {taarget 20}
+                                {with {inc-by-target {fun {x} {+ x target}}}
+                                      {inc-by-target 10}}}) "")
+(test/exn (run '{with {taarget 20}
+                                {with {inc-by-target {fun {x} {+ x target}}}
+                                      {with {target 20}
+                                            {inc-by-target 10}}}}) "")
 
 ;; print out failed tests explicity
 "tests failed:"
