@@ -90,6 +90,19 @@
 (define (is-app sym)
   (if (symbol=? sym 'app) true false))
 
+;; lookup-env : Env symbol -> WAE-Value
+;; looks up the symbol in the given environment, returning its value
+;; ERROR if the symbol is undefined.
+;; NOTE: where the symbol is bound multiple times, returns the value
+;; of the binding that is outermost in the Env object.
+(define (lookup-env env target-name)
+  (type-case Env env
+    [mtEnv () (error 'lookup-env "Unbound identifier ~a" target-name)]
+    [anEnv (name value restEnv)
+           (if (symbol=? target-name name)
+               value
+               (lookup-env restEnv target-name))]))
+
 ;; -------------------------------------------------------------------------
 ;; Main functions.
 ;; -------------------------------------------------------------------------
@@ -151,101 +164,92 @@
     ;; Remove with from AST by constructing an equivilant function
     ;; application.
     [(with? expr)
-     (local ([define f-arg (binding-name (with-b expr))]
-             [define f-body (with-body expr)]
-             [define app-args (binding-named-expr (with-b expr))])
-       (make-app (make-fun (list f-arg) f-body) (list app-args)))]
+     (local ([define f-arg (pre-process (binding-name (with-b expr)))]
+             [define f-body (pre-process (with-body expr))]
+             [define app-args (pre-process (binding-named-expr (with-b expr)))])
+       (pre-process (make-app (make-fun (list f-arg) f-body) 
+                              (list app-args))))]
     
     ;; Functions of more than one argument are transformed into
     ;; nested functions. Some sort of currying thingy.
     [(fun? expr)
      (if (> (length (fun-args expr)) 1)
          ;; Function has more than one argument, transform it:
-         (local ([define first-arg (first (fun-args expr))]
-                 [define other-args (rest (fun-args expr))]
-                 [define body (fun-body expr)])
-           (make-fun (list first-arg)
-                     (pre-process (make-fun other-args
-                                            body))))
+         (local ([define first-arg (pre-process (first (fun-args expr)))]
+                 [define other-args (pre-process (rest (fun-args expr)))]
+                 [define body (pre-process (fun-body expr))])
+           (pre-process (make-fun (list first-arg)
+                                  (pre-process (make-fun other-args
+                                                         body)))))
          ;; Just one (or zero) arguments, leave it as is:
          expr)]
     
     ;; Function applications of more then one argument are transformed
     ;; into nested applications of a single argument, like functions.
     [(app? expr)
-     (if (> (length (app-args expr)))
-         'nested-app
+     (if (> (length (app-args expr)) 1)
+         (local ([define first-arg (pre-process (first (app-args expr)))]
+                 [define other-args (pre-process (rest (app-args expr)))]
+                 [define f (pre-process (app-f expr))])
+           (pre-process (make-app (make-app f (list first-arg))
+                                  other-args)))
          expr)]
     
     ;; pre-process only checks with, fun and app. Otherwise we don't
     ;; preprocess it.
     [else expr] ))
 
-;; subst : WAE symbol WAE -> WAE
-;; Substitute second arg with third arg in first arg such that
-;; the resulting WAE has no free instances of second arg. For the
-;; most part, this code is from the PLAI text and has been slightly
-;; modified to suit my needs.
-(define (subst expr sub-id val)
-  (type-case CFWAE expr
-    [num (n) expr]
-    
-    ;; Retain abstract syntax for binops while substituting in WAEs.
-    [binop (o l r)
-           (make-binop
-            o
-            (subst l sub-id val)
-            (subst r sub-id val))]
-    
-    ;; Substitution algorithm given in PLAI text. Implementation
-    ;; specific details have been altered for my own use.
-    [with (binds body)
-          (if (symbol=? (binding-name binds) sub-id)
-              (make-with (make-binding (binding-name binds)
-                                       (subst (binding-named-expr binds)
-                                              sub-id
-                                              val))
-                         body)
-              (make-with (make-binding (binding-name binds)
-                                       (subst (binding-named-expr binds)
-                                              sub-id
-                                              val))
-                         (subst body sub-id val)) )]
-    
-    ;; Return correct binding value.
-    [id (v) (if (symbol=? v sub-id) val expr)]
-    
-    ;; TODO: subst f0
-    [if0 (c t e) '...]
-    
-    ;; TODO: subst fun
-    [fun (args body) '...]
-    
-    ;; TODO: subst app
-    [app (f args) '...] ))
-
 ;; interp : CFWAE -> CFWAE-Value
 ;; This procedure interprets the given CFWAE and produces a result 
 ;; in the form of a CFWAE-Value (either a closureV, thunkV, or numV).
 ;; (Assumes the input was successfully produced by pre-process.)
 (define (interp expr)
-  (type-case CFWAE expr
-    [num (n) n]
-    [binop (o l r) (o (interp l) (interp r))]
-    [with (binds body)
-          (interp (subst body
-                         (binding-name binds)
-                         (num (interp (binding-named-expr binds)))))]
-    [id (v) v]
-    
-    ;; TODO: interp if0
-    [if0 (c t e) '...]
-    
-    ;; TODO: interp fun
-    [fun (args body) '...]
-    
-    ;; TODO: interp app
-    [app (f args) '...] ))
+  (interp-env (mtEnv) expr))
+
+;; interp-env : Env CFWAE -> CFWAE-Value
+;; Takes an environment and an abstract syntax tree and computes the
+;; corresponding value within the given environment.
+(define (interp-env env expr)
+  ;; If expr is a CFWAE-Value we're at the end of some brach in the AST
+  ;; otherwise we need to do more work.
+  (if (CFWAE-Value? expr)
+      ;; If it's a CFWAE-Value, just give it back.
+      expr
+      
+      ;; Continue interping expr in the given environment.
+      (type-case CFWAE expr
+        ;; Give back numbers as numVs.
+        [num (n) (numV n)]
+        
+        ;; Binops result to numVs.
+        [binop (o l r) (numV (o 
+                              (numV-n (interp l)) 
+                              (numV-n (interp r))))]
+        
+        ;; No substitution, just use the environment for that.
+        [with (binds body)
+              (local ([define val (interp-env env (binding-named-expr (with-b expr)))]
+                      [define id (binding-name (with-b expr))])
+                (interp-env (anEnv id val env) body))]
+        
+        ;; Look up any identifier in the current environment.
+        [id (name) (lookup-env env name)]
+        
+        ;; TODO: interp if0
+        [if0 (c t e) '...]
+        
+        ;; TODO: Currently just creates a closure in the given environment.
+        [fun (arg body)
+             (closureV (first arg) body env)]
+        
+        ;; TODO: interp app
+        [app (f-expr args)
+             (local ([define val (interp-env env (first args))]
+                     [define fun-val (interp-env env f-expr)]
+                     [define fun-par (closureV-param fun-val)]
+                     [define fun-bod (closureV-body fun-val)])
+               (interp-env (anEnv fun-par val env)
+                           fun-bod))] )))
 
 ;; run : sexp -> CFWAE-Value
 ;; Consumes an sexp and passes it through parsing, pre-processing,
@@ -305,6 +309,7 @@
 ;; Unit testing.
 ;; -------------------------------------------------------------------------
 ;; Helper function tests
+"helper function tests"
 ;; is-binop tests
 (test (is-binop '+) true)
 (test (is-binop '/) true)
@@ -330,8 +335,16 @@
 (test (is-app (first '(app (fun {x} (+ x 1)) {1}))) true)
 (test (is-app (first '(if0 0 'x 'y))) false)
 
+;; lookup-env tests
+(test/exn (lookup-env (mtEnv) 'x) "")
+(test (lookup-env (anEnv 'x (numV 1) (mtEnv)) 'x) (numV 1))
+(test/exn (lookup-env (anEnv 'y (numV 1) (mtEnv)) 'x) "")
+(test (lookup-env (anEnv 'x (numV 1) (anEnv 'y (numV 2) (mtEnv))) 'x) (numV 1))
+(test (lookup-env (anEnv 'x (numV 1) (anEnv 'y (numV 2) (mtEnv))) 'y) (numV 2))
+(test (lookup-env (anEnv 'x (numV 1) (anEnv 'x (numV 2) (mtEnv))) 'x) (numV 1))
+
 ;; parser tests
-"simple parse tests"
+"parse tests"
 (test (parse '1) (num 1))
 (test (parse 'x) (id 'x))
 (test (parse '{+ 1 1}) (binop + (num 1) (num 1)))
@@ -370,7 +383,8 @@
 
 ;; pre-process tests
 "pre-process tests"
-(test (pre-process (parse '(x y z j k))) '...)
+(test (pre-process (parse '(x y z j k)))
+      (app (app (app (app (id 'x) (list (id 'y))) (list (id 'z))) (list (id 'j))) (list (id 'k))))
 (test (pre-process (parse '{fun {x} {+ 1 x}})) (fun '(x) (binop + (num 1) (id 'x))))
 (test (pre-process (parse '{if0 0 x y})) (if0 (num 0) (id 'x) (id 'y)))
 (test (pre-process (parse '{with {x 1} x})) (app (fun '(x) (id 'x)) (list (num 1))))
@@ -380,29 +394,33 @@
       (fun '(x) (fun '(y) (binop + (id 'x) (id 'y)))))
 (test (pre-process (parse '(fun (x y z) (+ x (* y z)))))
       (fun '(x) (fun '(y) (fun '(z) (binop + (id 'x) (binop * (id 'y) (id 'z)))))))
+(test (pre-process (parse '{with {target 20} 
+                                 {with {inc-by-target {fun {x} {+ x target}}} {inc-by-target 10}}}))
+      (app (fun '(target)
+                (app (fun '(inc-by-target)
+                          (app (id 'inc-by-target) 
+                               (list (num 10)))) (list (fun '(x) (binop + (id 'x) (id 'target))))))
+           (list (num 20))))
+
 
 ;; interpreter tests
-"simple interp tests"
-(test (interp (num 1)) 1)
-(test (interp (id 'x)) 'x)
-(test (interp (binop + (num 1) (num 1))) 2)
-(test (interp (binop + (binop - (num 10) (num 5))
-                     (binop * (num -1) (num -5)))) 10)
-(test (interp (num 100)) 100)
-(test (interp (parse '{+ 1 2})) 3)
-(test (interp (parse '{with {x 1} x})) 1)
+"interp/run tests"
+(test (run '1) (numV 1))
+(test (run '{+ 1 1}) (numV 2))
+(test (run '{+ {* 10 2} {/ 20 2}}) (numV 30))
+(test (run '{with {x 1} x}) (numV 1))
 
 ;; full interp texts from plai
 "interp with from PLAI"
-(test (interp (parse '{with {x {+ 5 5}} {+ x x}})) 20)
-(test (interp (parse '{with {x 5} {+ x x}})) 10)
-(test (interp (parse '{with {x {+ 5 5}} {with {y {- x 3}} {+ y y}}})) 14)
-(test (interp (parse '{with {x 5} {with {y {- x 3}} {+ y y}}})) 4)
-(test (interp (parse '{with {x 5} {+ x {with {x 3} 10}}})) 15)
-(test (interp (parse '{with {x 5} {+ x {with {x 3} x}}})) 8)
-(test (interp (parse '{with {x 5} {+ x {with {y 3} x}}})) 10)
-(test (interp (parse '{with {x 5} {with {y x} y}})) 5)
-(test (interp (parse '{with {x 5} {with {x x} x}})) 5)
+(test (run '{with {x {+ 5 5}} {+ x x}}) (numV 20))
+(test (run '{with {x 5} {+ x x}}) (numV 10))
+(test (run '{with {x {+ 5 5}} {with {y {- x 3}} {+ y y}}}) (numV 14))
+(test (run '{with {x 5} {with {y {- x 3}} {+ y y}}}) (numV 4))
+(test (run '{with {x 5} {+ x {with {x 3} 10}}}) (numV 15))
+(test (run '{with {x 5} {+ x {with {x 3} x}}}) (numV 8))
+(test (run '{with {x 5} {+ x {with {y 3} x}}}) (numV 10))
+(test (run '{with {x 5} {with {y x} y}}) (numV 5))
+(test (run '{with {x 5} {with {x x} x}}) (numV 5))
 
 ;; print out failed tests explicity
 "tests failed:"
