@@ -254,7 +254,7 @@
                      [define fun-val (interp-env env f-expr)]
                      [define fun-par (closureV-param fun-val)]
                      [define fun-bod (closureV-body fun-val)])
-               (interp-env (anEnv fun-par val env)
+               (interp-env (anEnv fun-par val (closureV-env fun-val))
                            fun-bod))] )))
 
 ;; run : sexp -> CFWAE-Value
