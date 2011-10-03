@@ -111,7 +111,7 @@
 ;; This procedure parses an expression into a CFWAE
 (define (parse sexp)
   (cond
-    ;; Numbers are trivial.
+    ;; Numbers and symbols are trivial.
     [(number? sexp) (num sexp)]
     
     ;; A ist can be a variety of things, find out what it is.
@@ -119,43 +119,33 @@
      (cond
        ;; Create binop by grabbing correct procedure from binops
        ;; and parsing the operands.
-       ;; ERROR if more than two operands.
        [(is-binop (first sexp))
-        (if (not (= (length sexp) 3))
-            (error 'parse "binop expects 2 args")
-            (local ([define opr (get-procedure (first sexp))]
-                    [define lhs (second sexp)]
-                    [define rhs (third sexp)])
-              (make-binop opr (parse lhs) (parse rhs)) ))]
+        (local ([define proc (get-procedure (first sexp))]
+                [define lhs (second sexp)]
+                [define rhs (third sexp)])
+          (make-binop proc (parse lhs) (parse rhs)) )]
        
        ;; Create with by making binding and parsing body.
        [(is-with (first sexp))
-        (if (not (= (length sexp) 3))
-            (error 'parse "with expects 2 args")
-            (local ([define id         (first (second sexp))]
-                    [define named-expr (second (second sexp))]
-                    [define body       (third sexp)])
-              (with (make-binding id (parse named-expr))
-                    (parse body)) ))]
+        (local ([define id (first (second sexp))]
+                [define named-expr (second (second sexp))]
+                [define body (third sexp)])
+          (with (make-binding id (parse named-expr))
+                (parse body)) )]
        
        ;; Create if0 by parsing each element of the expression
        [(is-if0 (first sexp))
-        (if (not (= (length sexp) 4))
-            (error 'parse "if0 expects 3 args")
-            (local 
-              ([define c (parse (second sexp))]
-               [define t (parse (third sexp))]
-               [define e (parse (fourth sexp))])
-              (make-if0 c t e)) )]
+        (local 
+          ([define c (parse (second sexp))]
+           [define t (parse (third sexp))]
+           [define e (parse (fourth sexp))])
+          (make-if0 c t e)) ]
        
        ;; Create function definition by parsing arguments and body.
        [(is-fun (first sexp))
-        (if (not (= (length sexp) 3))
-            (error 'parse "fun expects 2 args")
-            (local ([define args (second sexp)]
-                    [define body (third sexp)])
-              (make-fun args (parse body))))]
-       
+        (local ([define args (second sexp)]
+                [define body (third sexp)])
+          (make-fun args (parse body)) )]
        
        ;; Must be a function application. Parse function and arguments.
        [else (local ([define f (parse (first sexp))]
@@ -172,15 +162,6 @@
 ;; (Assumes the input was successfully produced by parse.)
 (define (pre-process expr)
   (cond
-    ;; Clean out the cases of if0.
-    [(if0? expr)
-     (local ([define c (if0-c expr)]
-             [define t (if0-t expr)]
-             [define e (if0-e expr)])
-       (if0 (pre-process c)
-            (pre-process t)
-            (pre-process e)))]
-    
     ;; Make sure to pre-process a binops left and right operands.
     [(binop? expr)
      (local ([define o (binop-op expr)]
@@ -255,28 +236,19 @@
         
         ;; The AST given to interp should never contain a with.
         [with (binds body)
-              (error 'interp-env "encountered 'with'")]
+              (error 'interp-env "Error: encountered 'with'")]
         
         ;; Look up any identifier in the current environment.
         [id (name) (lookup-env env name)]
         
         ;; TODO: interp if0
-        [if0 (c t e)
-             (local ([define c-result (interp-env env c)])
-               (if (numV? c-result)
-                   (if (= 0 (numV-n c-result))
-                       (interp-env env t)
-                       (interp-env env e))
-                   (error 'interp-env "if0 result not numV") ))]
+        [if0 (c t e) '...]
         
-        ;; Create a closure of the function in the given environment.
+        ;; TODO: Currently just creates a closure in the given environment.
         [fun (arg body)
-             (if (empty? arg)
-                 ;; No arguments to this function, make a thunk.
-                 (thunkV body env)
-                 ;; Function has argument, create a closure.
-                 (closureV (first arg) body env))]
+             (closureV (first arg) body env)]
         
+        ;; TODO: interp app
         [app (f-expr args)
              (local ([define val (interp-env env (first args))]
                      [define fun-val (interp-env env f-expr)]
@@ -419,12 +391,6 @@
                                                (binop + (id 'x) (id 'target))))
                   (app (id 'inc-by-target) (list (num 10))))))
 
-(test/exn (parse '{+ 1}) "")
-(test/exn (parse '{+ 5 1 x}) "")
-(test/exn (parse '{with {x 5} {+ 5 x} {+ 5 x}}) "")
-(test/exn (parse '{with {x 5}}) "")
-
-
 ;; pre-process tests
 "pre-process tests"
 (test (pre-process (parse '(x y z j k)))
@@ -471,15 +437,14 @@
 (test (run '{with {x 1} x}) (numV 1))
 (test (run '{with {double {fun {x} {+ x x}}}
                   {double 10}}) (numV 20))
-(test (run '{if0 0 1 2}) (numV 1))
-(test (run '{if0 {+ 5 1} {/ 1 0} {with {x 3} {* x x}}})
-      (numV 9))
+
 (test (run '{with {x 1} 2}) (numV 2))
 (test (run '{with {x {+ 1 2}} 2}) (numV 2))
 (test (run '{with {x 1} {with {x 2} x}}) (numV 2))
 (test (run '{with {x 1} {with {y 2} x}}) (numV 1))
 (test (run '{with {x 1} {with {x {+ x 1}} x}}) (numV 2))
 (test (run '{with {x 1} {with {y {+ x 1}} {+ x y}}}) (numV 3))
+
 
 (test (run '{with {target 5}
                   {with {inc-by-target {fun {x} {+ x target}}}
@@ -491,36 +456,16 @@
                       {with {y 10}
                             {f 0}}}) "")
 (test (run '{with {target 3}
-                  {with {inc-by-target {fun {x} {+ x target}}}
-                        {with {target 10000}
-                              {inc-by-target 3}}}}) (numV 6))
+                            {with {inc-by-target {fun {x} {+ x target}}}
+                                  {with {target 10000}
+                                        {inc-by-target 3}}}}) (numV 6))
 (test/exn (run '{with {taarget 20}
-                      {with {inc-by-target {fun {x} {+ x target}}}
-                            {inc-by-target 10}}}) "")
+                                {with {inc-by-target {fun {x} {+ x target}}}
+                                      {inc-by-target 10}}}) "")
 (test/exn (run '{with {taarget 20}
-                      {with {inc-by-target {fun {x} {+ x target}}}
-                            {with {target 20}
-                                  {inc-by-target 10}}}}) "")
-(test (run '{if0 {if0 {with {x 5} {- x 5}} 0 {+ 20 25}} 1 2})
-      (numV 1))
-(test (run '{if0 {with {inc-by-target 
-                        {with {target 25} {fun {x} {+ x target}}}}
-                       {inc-by-target 2}} 
-                 {with {x 1} {with {y {+ x 1}} {+ x y}}} 
-                 {with {target 3}
-                       {with {inc-by-target {fun {x} {+ x target}}}
-                             {with {target 10000}
-                                   {inc-by-target 3}}}}})
-      (numV 6))
-(test (run '{if0 {with {inc-by-target 
-                        {with {target -2} {fun {x} {+ x target}}}}
-                       {inc-by-target 2}} 
-                 {with {x 1} {with {y {+ x 1}} {+ x y}}} 
-                 {with {target 3}
-                       {with {inc-by-target {fun {x} {+ x target}}}
-                             {with {target 10000}
-                                   {inc-by-target 3}}}}})
-      (numV 3))
+                                {with {inc-by-target {fun {x} {+ x target}}}
+                                      {with {target 20}
+                                            {inc-by-target 10}}}}) "")
 
 ;; print out failed tests explicity
 "tests failed:"
