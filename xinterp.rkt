@@ -70,25 +70,33 @@
 ;; Consumes a symbol from parse and returns true if the symbol indicates
 ;; the sexp in parse is a with.
 (define (is-with sym)
-  (if (symbol=? sym 'with) true false))
+  (if (symbol? sym)
+      (if (symbol=? sym 'with) true false)
+      false))
 
 ;; is-if0 : symbol -> boolean
 ;; Consumes a symbol from parse and returns true if the symbol indicates
 ;; the sexp in parse is an if0.
 (define (is-if0 sym)
-  (if (symbol=? sym 'if0) true false))
+  (if (symbol? sym)
+      (if (symbol=? sym 'if0) true false)
+      false))
 
 ;; is-fun : symbol -> boolean
 ;; Consumes a symbol from parse and returns true if the symbol indicates
 ;; the sexp in parse is a fun.
 (define (is-fun sym)
-  (if (symbol=? sym 'fun) true false))
+  (if (symbol? sym)
+      (if (symbol=? sym 'fun) true false)
+      false))
 
 ;; is-app : symbol -> boolean
 ;; Consumes a symbol from parse and returns true if the symbol indicates
 ;; the sexp in parse is an app.
 (define (is-app sym)
-  (if (symbol=? sym 'app) true false))
+  (if (symbol? sym)
+      (if (symbol=? sym 'app) true false)
+      false))
 
 ;; lookup-env : Env symbol -> WAE-Value
 ;; looks up the symbol in the given environment, returning its value
@@ -119,7 +127,6 @@
      (cond
        ;; Create binop by grabbing correct procedure from binops
        ;; and parsing the operands.
-       ;; ERROR if more than two operands.
        [(is-binop (first sexp))
         (if (not (= (length sexp) 3))
             (error 'parse "binop expects 2 args")
@@ -191,8 +198,8 @@
     ;; Remove with from AST by constructing an equivilant function
     ;; application.
     [(with? expr)
-     (local ([define f-arg (pre-process (binding-name (with-b expr)))]
-             [define f-body (pre-process (with-body expr))]
+     (local ([define f-arg    (pre-process (binding-name (with-b expr)))]
+             [define f-body   (pre-process (with-body expr))]
              [define app-args (pre-process (binding-named-expr (with-b expr)))])
        (pre-process (make-app (make-fun (list f-arg) f-body) 
                               (list app-args))))]
@@ -202,9 +209,9 @@
     [(fun? expr)
      (if (> (length (fun-args expr)) 1)
          ;; Function has more than one argument, transform it:
-         (local ([define first-arg (pre-process (first (fun-args expr)))]
+         (local ([define first-arg  (pre-process (first (fun-args expr)))]
                  [define other-args (pre-process (rest (fun-args expr)))]
-                 [define body (pre-process (fun-body expr))])
+                 [define body       (pre-process (fun-body expr))])
            (pre-process (make-fun (list first-arg)
                                   (pre-process (make-fun other-args
                                                          body)))))
@@ -215,9 +222,9 @@
     ;; into nested applications of a single argument, like functions.
     [(app? expr)
      (if (> (length (app-args expr)) 1)
-         (local ([define first-arg (pre-process (first (app-args expr)))]
+         (local ([define first-arg  (pre-process (first (app-args expr)))]
                  [define other-args (pre-process (rest (app-args expr)))]
-                 [define f (pre-process (app-f expr))])
+                 [define f          (pre-process (app-f expr))])
            (pre-process (make-app (make-app f (list first-arg))
                                   other-args)))
          expr)]
@@ -249,9 +256,10 @@
         [num (n) (numV n)]
         
         ;; Binops result to numVs.
-        [binop (o l r) (numV (o 
-                              (numV-n (interp-env env l)) 
-                              (numV-n (interp-env env r))))]
+        [binop (o l r) 
+               (local ([define lhs (numV-n (interp-env env l))]
+                       [define rhs (numV-n (interp-env env r))])
+                 (numV (o lhs rhs)) )]
         
         ;; The AST given to interp should never contain a with.
         [with (binds body)
@@ -278,12 +286,25 @@
                  (closureV (first arg) body env))]
         
         [app (f-expr args)
-             (local ([define val (interp-env env (first args))]
-                     [define fun-val (interp-env env f-expr)]
-                     [define fun-par (closureV-param fun-val)]
-                     [define fun-bod (closureV-body fun-val)])
-               (interp-env (anEnv fun-par val (closureV-env fun-val))
-                           fun-bod))] )))
+             (local ([define fun-val (interp-env env f-expr)])
+               (cond
+                 
+                 ;; Function application with arguments.
+                 [(closureV? fun-val)
+                  (local ([define val     (interp-env env (first args))]
+                          [define fun-val (interp-env env f-expr)]
+                          [define fun-par (closureV-param fun-val)]
+                          [define fun-bod (closureV-body fun-val)])
+                    (interp-env (anEnv fun-par val (closureV-env fun-val))
+                                fun-bod))]
+                 
+                 ;; Function of zero arguments, just interp the body.
+                 [(thunkV? fun-val)
+                  (interp-env (thunkV-env fun-val)
+                              (thunkV-body fun-val))]
+                 
+                 ;; Not a thunk or a closure, signal an error.
+                 [else (error 'interp-env "app did not get closure or thunk")] ))] )))
 
 ;; run : sexp -> CFWAE-Value
 ;; Consumes an sexp and passes it through parsing, pre-processing,
@@ -291,53 +312,10 @@
 (define (run sexp)
   (interp (pre-process (parse sexp))))
 
-;; Possibly useful additional functions:
-
 ;; failed-tests : -> (listof plai-test-result)
 ;; Generates a list of only the failed (non-good) tests from plai-all-test-results.
 (define (failed-tests)
   (reverse (filter (compose not (curry symbol=? 'good) first) plai-all-test-results)))
-
-;; CFWAE-pre-fold : (CFWAE -> CFWAE) CFWAE -> CFWAE
-;; Takes a function and applies it to each expression node in the 
-;; given CFWAE.  Note that the function is applied pre-order; so
-;; it is applied to a node before its sub-trees.  WARNING: if
-;; your function generates a new node that itself needs to be
-;; re-processed through the function, CFWAE-pre-fold will not do
-;; so.  (It calls f on a node and then recurses into any sub-nodes
-;; of whatever node f returns.  It does not reprocess the node 
-;; itself.)
-(define (CFWAE-pre-fold f expr)
-  (local ([define (ffold expr)
-            (type-case CFWAE (f expr)
-              [num (n) (num n)]
-              [binop (op lhs rhs) (binop op (ffold lhs) (ffold rhs))]
-              [with (b body) (with (binding (binding-name b)
-                                            (ffold (binding-named-expr b)))
-                                   (ffold body))]
-              [id (name) (id name)]
-              [if0 (c t e) (if0 (ffold c) (ffold t) (ffold e))]
-              [fun (args body) (fun args (ffold body))]
-              [app (f args) (app (ffold f) (map ffold args))])])
-    (ffold expr)))
-
-;; Example: 
-;; swap-op-args : CFWAE -> CFWAE
-;; Consumes a program and generates the corresponding program in which
-;; each instance of a binop has had its lhs and rhs swapped.
-;(define (swap-op-args program)
-;  (CFWAE-pre-fold (lambda (exp)
-;                    (type-case CFWAE exp
-;                               [binop (op lhs rhs) (binop op rhs lhs)]
-;                               [else exp]))
-;                  program))
-;
-;(test (swap-op-args (parse '{+ 1 2})) (parse '{+ 2 1}))
-;(test (swap-op-args (parse '{+ 3 {- {* 1 2} {/ 3 4}}}))
-;      (parse '{+ {- {/ 4 3} {* 2 1}} 3}))
-;(test (swap-op-args (parse '{fun {x} {+ x {if0 0 {+ 1 2} 3}}}))
-;      (parse '{fun {x} {+ {if0 0 {+ 2 1} 3} x}}))
-
 
 ;; -------------------------------------------------------------------------
 ;; Unit testing.
@@ -481,6 +459,8 @@
 (test (run '{with {x 1} {with {x {+ x 1}} x}}) (numV 2))
 (test (run '{with {x 1} {with {y {+ x 1}} {+ x y}}}) (numV 3))
 
+(test/exn (run '{1 2}) "")
+(test (run '(with {myfun {fun () 400}} {myfun})) (numV 400))
 (test (run '{with {target 5}
                   {with {inc-by-target {fun {x} {+ x target}}}
                         {inc-by-target 6}}}) (numV 11))
