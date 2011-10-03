@@ -152,8 +152,10 @@
             (local ([define id         (first (second sexp))]
                     [define named-expr (second (second sexp))]
                     [define body       (third sexp)])
-              (with (make-binding id (parse named-expr))
-                    (parse body)) ))]
+              (if (bad-keyword id)
+                  (error 'parse "bad id keyword in with")
+                  (with (make-binding id (parse named-expr))
+                        (parse body))) ))]
        
        ;; Create if0 by parsing each element of the expression
        [(is-if0 (first sexp))
@@ -171,7 +173,9 @@
             (error 'parse "fun expects 2 args")
             (local ([define args (second sexp)]
                     [define body (third sexp)])
-              (make-fun args (parse body))))]
+              (if (member true (map bad-keyword args))
+                  (error 'parse "bad arg name in function")
+                  (make-fun args (parse body)))))]
        
        ;; Must be a function application. Parse function and arguments.
        [else (local ([define f (parse (first sexp))]
