@@ -98,6 +98,14 @@
       (if (symbol=? sym 'app) true false)
       false))
 
+;; bad-keyword : symbol -> boolean
+;; Consumes a symbol from parse and returns true if the symbol (intended
+;; as an id) is a reserved keyword in the CFWAE language.
+(define (bad-keyword sym)
+  (if (member sym '(if0 with fun app))
+      true
+      false))
+
 ;; lookup-env : Env symbol -> WAE-Value
 ;; looks up the symbol in the given environment, returning its value
 ;; ERROR if the symbol is undefined.
@@ -137,7 +145,9 @@
        
        ;; Create with by making binding and parsing body.
        [(is-with (first sexp))
-        (if (not (= (length sexp) 3))
+        (if (or
+             (not (= (length sexp) 3))
+             (not (= (length (second sexp)) 2)))
             (error 'parse "with expects 2 args")
             (local ([define id         (first (second sexp))]
                     [define named-expr (second (second sexp))]
@@ -163,14 +173,15 @@
                     [define body (third sexp)])
               (make-fun args (parse body))))]
        
-       
        ;; Must be a function application. Parse function and arguments.
        [else (local ([define f (parse (first sexp))]
                      [define args (map parse (rest sexp))])
                (make-app f args))] )]
     
     ;; If it's nothing else, it's an id.
-    [else (id sexp)] ))
+    [else (if (bad-keyword sexp)
+              (error 'parse "id had reserved keyword")
+              (id sexp))] ))
 
 ;; pre-process : CFWAE -> CFWAE
 ;; Consumes a CFWAE and constructs a corresponding CFWAE without
@@ -259,7 +270,10 @@
         [binop (o l r) 
                (local ([define lhs (numV-n (interp-env env l))]
                        [define rhs (numV-n (interp-env env r))])
-                 (numV (o lhs rhs)) )]
+                 ;; Check for divison by zero.
+                 (if (and (equal? o /) (= rhs 0))
+                     (error 'interp-env "please don't divide by 0")
+                     (numV (o lhs rhs))) )]
         
         ;; The AST given to interp should never contain a with.
         [with (binds body)
@@ -346,6 +360,11 @@
 ;; is-app tests
 (test (is-app (first '(app (fun {x} (+ x 1)) {1}))) true)
 (test (is-app (first '(if0 0 'x 'y))) false)
+
+;; bad-keyword tests
+(test (bad-keyword 'random) false)
+(test (bad-keyword 'if0) true)
+(test (bad-keyword 'with) true)
 
 ;; lookup-env tests
 (test/exn (lookup-env (mtEnv) 'x) "")
@@ -502,6 +521,92 @@
                                    {inc-by-target 3}}}}})
       (numV 3))
 
+
+;; new tests
+;;; parse tests
+
+;; Test each type of expression.
+(test (parse '1) (num 1))
+(test (parse 'x) (id 'x))
+(test/exn (parse 'fun) "")
+(test (parse '{+ 1 1}) (binop + (num 1) (num 1)))
+(test (parse '{with {x 1} x}) (with (binding 'x (num 1)) (id 'x)))
+; An extra with test
+(test (parse '{with {x 1} {with {x 2} x}}) 
+      (with (binding 'x (num 1)) (with (binding 'x (num 2)) (id 'x))))
+; bad withs
+(test/exn (parse '(with {x 1} x y)) "")
+(test/exn (parse '(with {x 1 x} y)) "")
+(test/exn (parse '(with x 1 x)) "")
+; if0 tests
+(test (parse '{if0 1 3 2})
+      (if0 (num 1) (num 3) (num 2)))
+(test (parse '{if0 1 3 {with {x 1} {with {x 2} x}}})
+      (if0 (num 1) (num 3) (with (binding 'x (num 1)) (with (binding 'x (num 2)) (id 'x)))))
+; This one is from the assignment directions
+(test (parse '{1 2}) (app (num 1) (list (num 2))))
+
+; fun tests
+(test (parse '{fun {x} 1}) (fun '(x) (num 1)))
+(test (parse '{fun {} {+ 1 1}}) (fun '() (binop + (num 1) (num 1))))
+(test (parse '{fun {x y !} {* {+ x y} !}}) (fun '(x y !) (binop * (binop + (id 'x) (id 'y)) (id '!))))
+
+; app tests
+(test (parse '{{fun {x} 1} 5}) (app (fun '(x) (num 1)) (list (num 5))))
+(test (parse '{{fun () {+ 1 1}}}) (app (fun '() (binop + (num 1) (num 1))) empty))
+(test (parse '{{fun {x y !} {* {+ x y} !}} 1 2 3}) (app (fun '(x y !) (binop * (binop + (id 'x) (id 'y)) (id '!))) (list (num 1) (num 2) (num 3))))
+
+;;; pre-process tests
+
+;; Test one of each expression that shouldn't change.
+(test (pre-process (num 1)) (num 1))
+(test (pre-process (id 'x)) (id 'x))
+(test (pre-process (binop + (num 1) (num 1))) (binop + (num 1) (num 1)))
+(test (pre-process (fun '(x) (num 1))) (fun '(x) (num 1)))
+(test (pre-process (fun '() (binop + (num 1) (num 1)))) (fun '() (binop + (num 1) (num 1))))
+(test (pre-process (if0 (num 1) (num 3) (num 2))) (if0 (num 1) (num 3) (num 2)))
+(test (pre-process (app (fun '(x) (num 1)) (list (num 5)))) (app (fun '(x) (num 1)) (list (num 5))))
+
+; with tests
+(test (pre-process (with (binding 'x (num 1)) (id 'x))) (app (fun '(x) (id 'x)) (list(num 1))))
+(test (pre-process (with (binding 'x (num 1)) (with (binding 'x (num 2)) (id 'x)))) (app (fun '(x) (app (fun '(x) (id 'x)) (list(num 2)))) (list(num 1))))
+(test (pre-process (if0 (num 1) (num 3) (with (binding 'x (num 1)) (with (binding 'x (num 2)) (id 'x))))) (if0 (num 1) (num 3) (app (fun '(x) (app (fun '(x) (id 'x)) (list(num 2)))) (list(num 1)))))
+
+; fun tests
+(test (pre-process (fun '(x y !) (binop * (binop + (id 'x) (id 'y)) (id '!)))) (fun '(x) (fun '(y) (fun '(!) (binop * (binop + (id 'x) (id 'y)) (id '!))))))
+
+; app tests
+(test (pre-process (app (fun '() (binop + (num 1) (num 1))) empty)) (app (fun '() (binop + (num 1) (num 1))) empty))
+(test (pre-process (app (fun '(x y !) (binop * (binop + (id 'x) (id 'y)) (id '!))) (list (num 1) (num 2) (num 3)))) (app (app (app(fun '(x) (fun '(y) (fun '(!) (binop * (binop + (id 'x) (id 'y)) (id '!))))) (list (num 1))) (list (num 2))) (list (num 3))) )
+
+;;; interp tests
+
+; A few basic ones
+(test (interp (num 1)) (numV 1))
+(test (interp (binop + (num 1) (num 1))) (numV 2))
+(test (interp (if0 (num 1) (num 3) (num 2))) (numV 2))
+(test/exn (interp (with (binding 'x (num 1)) (id 'x))) "")
+; This one is from the assignment directions
+(test/exn (interp (app (num 1) (list (num 2)))) "")
+
+; Tests that involve env
+(test/exn (interp (id 'x)) "")
+(test (interp (app (fun '(x) (id 'x)) (list(num 1)))) (numV 1))
+(test (interp (fun '(x) (num 1))) (closureV 'x (num 1) (mtEnv)))
+(test (interp (fun '() (binop + (num 1) (num 1)))) (thunkV (binop + (num 1) (num 1)) (mtEnv) ))
+
+; More complicated tests.
+(test (interp (if0 (num 1) (num 3) (app (fun '(x) (app (fun '(x) (id 'x)) (list(num 2)))) (list(num 1))))) (numV 2))
+(test (interp (fun '(x) (fun '(y) (fun '(!) (binop * (binop + (id 'x) (id 'y)) (id '!)))))) (closureV 'x (fun '(y) (fun '(!) (binop * (binop + (id 'x) (id 'y)) (id '!)))) (mtEnv)))
+(test (interp (app (fun '() (binop + (num 1) (num 1))) empty)) (numV 2))
+(test (interp (app (app (app (fun '(x) (fun '(y) (fun '(!) (binop * (binop + (id 'x) (id 'y)) (id '!))))) (list (num 1))) (list (num 2))) (list (num 3)))) (numV 9))
+
+;;; run tests + error checking
+;;; (assumption: if everything works for parse, pre-process and interp, and one thing works for run, then run should work for everything.)
+(test/exn (run '{/ 1 0}) "")
+(test/exn (run '{{fun {x} 1} 5 2}) "")
+(test (run '{{fun {x y z} {- {- x y} z}} 2 3 4}) (numV -5))
+(test (run '{{fun {x y !} {* {+ x y} !}} 1 2 3}) (numV 9))
 ;; print out failed tests explicity
 "tests failed:"
 (failed-tests)
