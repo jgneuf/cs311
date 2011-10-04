@@ -48,7 +48,8 @@
 (define binops (list '+ + '- - '* * '/ /))
 
 ;; get-procedure : symbol -> procedure
-;; Use the helper function to return a procedure matching the given operator.
+;; Use the helper function to return a procedure matching the given
+;; operator.
 (define (get-procedure operator)
   (get-procedure-helper operator binops))
 
@@ -61,8 +62,9 @@
       (get-procedure-helper op (rest (rest bo))) ))
 
 ;; is-binop : symbol -> boolean
-;; Consume a symbol and return true if it's a (supported) binary operator.
-;; Could potentially cause errors if an actual procedure is passed.
+;; Consume a symbol and return true if it's a (supported) binary 
+;; operator. Could potentially cause errors if an actual procedure
+;; is passed.
 (define (is-binop sym)
   (if (member sym binops) true false))
 
@@ -106,7 +108,7 @@
       true
       false))
 
-;; lookup-env : Env symbol -> WAE-Value
+;; lookup-env : Env symbol -> CFWAE-Value
 ;; looks up the symbol in the given environment, returning its value
 ;; ERROR if the symbol is undefined.
 ;; NOTE: where the symbol is bound multiple times, returns the value
@@ -118,7 +120,7 @@
     [anEnv (name value restEnv)
            (if (symbol=? target-name name)
                value
-               (lookup-env restEnv target-name))]))
+               (lookup-env restEnv target-name))] ))
 
 ;; -------------------------------------------------------------------------
 ;; Main functions.
@@ -133,34 +135,62 @@
     ;; A ist can be a variety of things, find out what it is.
     [(list? sexp)
      (cond
+       ;; ERROR if program is empty.
+       [(empty? sexp)
+        (error 'parse "Empty program.")]
+       
        ;; Create binop by grabbing correct procedure from binops
        ;; and parsing the operands.
        [(is-binop (first sexp))
+        
+        ;; ERROR if binop is not applied to two arguments.
         (if (not (= (length sexp) 3))
-            (error 'parse "binop expects 2 args")
+            (error 'parse "Binop expects two arguments. Given ~a."
+                   (- (length sexp) 1))
+            
+            ;; Get the procedure and parse each operands before
+            ;; creating a binop.
             (local ([define opr (get-procedure (first sexp))]
                     [define lhs (second sexp)]
                     [define rhs (third sexp)])
-              (make-binop opr (parse lhs) (parse rhs)) ))]
+              (binop opr (parse lhs) (parse rhs)) ))]
        
        ;; Create with by making binding and parsing body.
        [(is-with (first sexp))
-        (if (or
-             (not (= (length sexp) 3))
-             (not (= (length (second sexp)) 2)))
-            (error 'parse "with expects 2 args")
+        
+        ;; ERROR if with expression has less than three arguments.
+        ;; ERROR if with binding does not have two elements.
+        (if (or (not (= (length sexp) 3))
+                (not (= (length (second sexp)) 2)))
+            (error 'parse "With expects two arguments. Given ~a."
+                   (- (length sexp) 1))
+            
+            ;; Define the binding's id, the binding's value and
+            ;; the body of the with.
             (local ([define id         (first (second sexp))]
                     [define named-expr (second (second sexp))]
                     [define body       (third sexp)])
-              (if (bad-keyword id)
-                  (error 'parse "bad id keyword in with")
+              
+              ;; Create the binding WITHOUT parsing id. But parse
+              ;; the named expression and the body.
+              ;; ERROR if id is a keyword of CFWAE.
+              (if (or (bad-keyword id)
+                      (not (symbol? id)))
+                  (error 'parse "With contains reserved keyword: ~a."
+                         id)
                   (with (make-binding id (parse named-expr))
                         (parse body))) ))]
        
        ;; Create if0 by parsing each element of the expression
        [(is-if0 (first sexp))
+        
+        ;; ERROR if if0 does not contain 3 elements.
         (if (not (= (length sexp) 4))
-            (error 'parse "if0 expects 3 args")
+            (error 'parse "if0 expects three elements. Given ~a."
+                   (- (length sexp) 1))
+            
+            ;; Define condition, then and else elements by parsing them,
+            ;; then create the if0.
             (local 
               ([define c (parse (second sexp))]
                [define t (parse (third sexp))]
@@ -169,23 +199,42 @@
        
        ;; Create function definition by parsing arguments and body.
        [(is-fun (first sexp))
-        (if (not (= (length sexp) 3))
-            (error 'parse "fun expects 2 args")
+        
+        ;; ERROR if function does not contain three elements.
+        ;; ERROR if function argument(s) is not a list.
+        ;; ERROR if one or more function arguments is not a symbol.
+        (if (or (not (= (length sexp) 3))
+                (not (list? (second sexp)))
+                (member false (map symbol? (second sexp))))
+            (error 'parse "Function definition invalid: ~a. Function must
+                           contain (1) argument list of symbols and (2) body."
+                   sexp)
+            
+            ;; Define function arguments and function body without parsing.
             (local ([define args (second sexp)]
                     [define body (third sexp)])
+              
+              ;; ERROR if argument name is a reserved word.
               (if (member true (map bad-keyword args))
-                  (error 'parse "bad arg name in function")
+                  (error 'parse "Argument is a reserved word: ~a."
+                         args)
                   (make-fun args (parse body)))))]
        
        ;; Must be a function application. Parse function and arguments.
-       [else (local ([define f (parse (first sexp))]
+       [else (local ([define func (parse (first sexp))]
                      [define args (map parse (rest sexp))])
-               (make-app f args))] )]
+               (make-app func args))] )]
     
-    ;; If it's nothing else, it's an id.
-    [else (if (bad-keyword sexp)
-              (error 'parse "id had reserved keyword")
-              (id sexp))] ))
+    ;; Create an id from a symbol.
+    [(symbol? sexp)
+     
+     ;; ERROR if symbol is a reserved word.
+     (if (bad-keyword sexp)
+         (error 'parse "id cannot be reserved word: ~a" sexp)
+         (id sexp))]
+    
+    ;; ERROR on unknown/invalid expression.
+    [else (error 'parse "Unknown/invalid expression: ~a" sexp)] ))
 
 ;; pre-process : CFWAE -> CFWAE
 ;; Consumes a CFWAE and constructs a corresponding CFWAE without
@@ -194,7 +243,9 @@
 ;; (Assumes the input was successfully produced by parse.)
 (define (pre-process expr)
   (cond
-    ;; Clean out the cases of if0.
+    
+    ;; Clean out the cases of if0. This is for the elements if an
+    ;; if0, since they may contain withs/funs/apps.
     [(if0? expr)
      (local ([define c (if0-c expr)]
              [define t (if0-t expr)]
@@ -203,7 +254,7 @@
             (pre-process t)
             (pre-process e)))]
     
-    ;; Make sure to pre-process a binops left and right operands.
+    ;; Pre-process the left and right operands of a binop.
     [(binop? expr)
      (local ([define o (binop-op expr)]
              (define l (binop-lhs expr))
@@ -220,32 +271,39 @@
                               (list app-args))))]
     
     ;; Functions of more than one argument are transformed into
-    ;; nested functions. Some sort of currying thingy.
+    ;; nested functions of one argument, like currying.
     [(fun? expr)
      (if (> (length (fun-args expr)) 1)
-         ;; Function has more than one argument, transform it:
+         
+         ;; Function has more than one argument, transform it.
          (local ([define first-arg  (pre-process (first (fun-args expr)))]
                  [define other-args (pre-process (rest (fun-args expr)))]
                  [define body       (pre-process (fun-body expr))])
            (pre-process (make-fun (list first-arg)
                                   (pre-process (make-fun other-args
                                                          body)))))
+         
          ;; Just one (or zero) arguments, leave it as is:
          expr)]
     
     ;; Function applications of more then one argument are transformed
     ;; into nested applications of a single argument, like functions.
     [(app? expr)
+     
+     ;; Applications of more than one argument require pre-processing of
+     ;; each element.
      (if (> (length (app-args expr)) 1)
          (local ([define first-arg  (pre-process (first (app-args expr)))]
                  [define other-args (pre-process (rest (app-args expr)))]
                  [define f          (pre-process (app-f expr))])
            (pre-process (make-app (make-app f (list first-arg))
                                   other-args)))
+         
+         ;; Application of one argument is just the expression.
          expr)]
     
-    ;; pre-process only checks with, fun and app. Otherwise we don't
-    ;; preprocess it.
+    ;; If it wasn't something we needed to pre-process, just return
+    ;; the expression.
     [else expr] ))
 
 ;; interp : CFWAE -> CFWAE-Value
@@ -259,8 +317,9 @@
 ;; Takes an environment and an abstract syntax tree and computes the
 ;; corresponding value within the given environment.
 (define (interp-env env expr)
-  ;; If expr is a CFWAE-Value we're at the end of some brach in the AST
-  ;; otherwise we need to do more work.
+  
+  ;; If expr is a CFWAE-Value we're at the end of some branch in the 
+  ;; AST otherwise we need to do more work.
   (if (CFWAE-Value? expr)
       ;; If it's a CFWAE-Value, just give it back.
       expr
@@ -270,32 +329,46 @@
         ;; Give back numbers as numVs.
         [num (n) (numV n)]
         
-        ;; Binops result to numVs.
-        [binop (o l r) 
-               (local ([define lhs (numV-n (interp-env env l))]
-                       [define rhs (numV-n (interp-env env r))])
-                 ;; Check for divison by zero.
-                 (if (and (equal? o /) (= rhs 0))
-                     (error 'interp-env "please don't divide by 0")
-                     (numV (o lhs rhs))) )]
+        ;; Define left and right operands by interping them in the
+        ;; given environment. The result will be a numV, so we need
+        ;; to extract the value before we apply the binary operator.
+        [binop (o l r)
+               (local ([define lhs (interp-env env l)]
+                       [define rhs (interp-env env r)])
+                 
+                 ;; ERROR if interp-env returned non numV.
+                 ;; ERROR if division by zero.
+                 (cond
+                   [(or (not (numV? rhs)) (not (numV? lhs)))
+                    (error 'interp-env "binop given non-numV type: ~a and ~b."
+                           lhs rhs)]
+                   [(and (equal? o /) (= (numV-n rhs) 0))
+                    (error 'interp-env "Division by zero not legal.")]
+                   [(numV (o (numV-n lhs) (numV-n rhs)))] ))]
         
         ;; The AST given to interp should never contain a with.
         [with (binds body)
-              (error 'interp-env "encountered 'with'")]
+              (error 'interp-env "Encountered with expression.")]
         
         ;; Look up any identifier in the current environment.
         [id (name) (lookup-env env name)]
         
-        ;; TODO: interp if0
+        ;; Evaluate the if condition and execute either the then
+        ;; element or the else element.
         [if0 (c t e)
              (local ([define c-result (interp-env env c)])
                (if (numV? c-result)
                    (if (= 0 (numV-n c-result))
                        (interp-env env t)
                        (interp-env env e))
-                   (error 'interp-env "if0 result not numV") ))]
+                   
+                   ;; ERROR if condition result is not of type numV.
+                   (error 'interp-env "if0 result not of type numV: ~a."
+                          c-result) ))]
         
-        ;; Create a closure of the function in the given environment.
+        ;; Functions evaluate to a closure for functions of one or more
+        ;; arguments, or thunks for functions with no arguments. Both
+        ;; contain the environment they live in.
         [fun (arg body)
              (if (empty? arg)
                  ;; No arguments to this function, make a thunk.
@@ -303,11 +376,15 @@
                  ;; Function has argument, create a closure.
                  (closureV (first arg) body env))]
         
+        ;; Evaluate functions of zero or more arguments in their 
+        ;; environments.
         [app (f-expr args)
              (local ([define fun-val (interp-env env f-expr)])
                (cond
                  
-                 ;; Function application with arguments.
+                 ;; Function application with arguments first defines
+                 ;; the environment it lives in, then grabs the argument,
+                 ;; body and parameter of the function so it can be applied.
                  [(closureV? fun-val)
                   (local ([define val     (interp-env env (first args))]
                           [define fun-val (interp-env env f-expr)]
@@ -316,13 +393,16 @@
                     (interp-env (anEnv fun-par val (closureV-env fun-val))
                                 fun-bod))]
                  
-                 ;; Function of zero arguments, just interp the body.
+                 ;; Functions without arguments have their body evaluated in
+                 ;; the given environment.
                  [(thunkV? fun-val)
                   (interp-env (thunkV-env fun-val)
                               (thunkV-body fun-val))]
                  
-                 ;; Not a thunk or a closure, signal an error.
-                 [else (error 'interp-env "app did not get closure or thunk")] ))] )))
+                 ;; A function application without being a closure or a thunk
+                 ;; is impossible, signal an error.
+                 [else (error 'interp-env "No closure or thunk given to app: ~a."
+                              fun-val)] ))] )))
 
 ;; run : sexp -> CFWAE-Value
 ;; Consumes an sexp and passes it through parsing, pre-processing,
@@ -466,6 +546,7 @@
 
 ;; interpreter/run tests
 "interp/run tests"
+(test/exn (run '()) "")
 (test (run '1) (numV 1))
 (test (run '{+ 1 1}) (numV 2))
 (test (run '{+ {* 10 2} {/ 20 2}}) (numV 30))
@@ -525,92 +606,6 @@
                                    {inc-by-target 3}}}}})
       (numV 3))
 
-
-;; new tests
-;;; parse tests
-
-;; Test each type of expression.
-(test (parse '1) (num 1))
-(test (parse 'x) (id 'x))
-(test/exn (parse 'fun) "")
-(test (parse '{+ 1 1}) (binop + (num 1) (num 1)))
-(test (parse '{with {x 1} x}) (with (binding 'x (num 1)) (id 'x)))
-; An extra with test
-(test (parse '{with {x 1} {with {x 2} x}}) 
-      (with (binding 'x (num 1)) (with (binding 'x (num 2)) (id 'x))))
-; bad withs
-(test/exn (parse '(with {x 1} x y)) "")
-(test/exn (parse '(with {x 1 x} y)) "")
-(test/exn (parse '(with x 1 x)) "")
-; if0 tests
-(test (parse '{if0 1 3 2})
-      (if0 (num 1) (num 3) (num 2)))
-(test (parse '{if0 1 3 {with {x 1} {with {x 2} x}}})
-      (if0 (num 1) (num 3) (with (binding 'x (num 1)) (with (binding 'x (num 2)) (id 'x)))))
-; This one is from the assignment directions
-(test (parse '{1 2}) (app (num 1) (list (num 2))))
-
-; fun tests
-(test (parse '{fun {x} 1}) (fun '(x) (num 1)))
-(test (parse '{fun {} {+ 1 1}}) (fun '() (binop + (num 1) (num 1))))
-(test (parse '{fun {x y !} {* {+ x y} !}}) (fun '(x y !) (binop * (binop + (id 'x) (id 'y)) (id '!))))
-
-; app tests
-(test (parse '{{fun {x} 1} 5}) (app (fun '(x) (num 1)) (list (num 5))))
-(test (parse '{{fun () {+ 1 1}}}) (app (fun '() (binop + (num 1) (num 1))) empty))
-(test (parse '{{fun {x y !} {* {+ x y} !}} 1 2 3}) (app (fun '(x y !) (binop * (binop + (id 'x) (id 'y)) (id '!))) (list (num 1) (num 2) (num 3))))
-
-;;; pre-process tests
-
-;; Test one of each expression that shouldn't change.
-(test (pre-process (num 1)) (num 1))
-(test (pre-process (id 'x)) (id 'x))
-(test (pre-process (binop + (num 1) (num 1))) (binop + (num 1) (num 1)))
-(test (pre-process (fun '(x) (num 1))) (fun '(x) (num 1)))
-(test (pre-process (fun '() (binop + (num 1) (num 1)))) (fun '() (binop + (num 1) (num 1))))
-(test (pre-process (if0 (num 1) (num 3) (num 2))) (if0 (num 1) (num 3) (num 2)))
-(test (pre-process (app (fun '(x) (num 1)) (list (num 5)))) (app (fun '(x) (num 1)) (list (num 5))))
-
-; with tests
-(test (pre-process (with (binding 'x (num 1)) (id 'x))) (app (fun '(x) (id 'x)) (list(num 1))))
-(test (pre-process (with (binding 'x (num 1)) (with (binding 'x (num 2)) (id 'x)))) (app (fun '(x) (app (fun '(x) (id 'x)) (list(num 2)))) (list(num 1))))
-(test (pre-process (if0 (num 1) (num 3) (with (binding 'x (num 1)) (with (binding 'x (num 2)) (id 'x))))) (if0 (num 1) (num 3) (app (fun '(x) (app (fun '(x) (id 'x)) (list(num 2)))) (list(num 1)))))
-
-; fun tests
-(test (pre-process (fun '(x y !) (binop * (binop + (id 'x) (id 'y)) (id '!)))) (fun '(x) (fun '(y) (fun '(!) (binop * (binop + (id 'x) (id 'y)) (id '!))))))
-
-; app tests
-(test (pre-process (app (fun '() (binop + (num 1) (num 1))) empty)) (app (fun '() (binop + (num 1) (num 1))) empty))
-(test (pre-process (app (fun '(x y !) (binop * (binop + (id 'x) (id 'y)) (id '!))) (list (num 1) (num 2) (num 3)))) (app (app (app(fun '(x) (fun '(y) (fun '(!) (binop * (binop + (id 'x) (id 'y)) (id '!))))) (list (num 1))) (list (num 2))) (list (num 3))) )
-
-;;; interp tests
-
-; A few basic ones
-(test (interp (num 1)) (numV 1))
-(test (interp (binop + (num 1) (num 1))) (numV 2))
-(test (interp (if0 (num 1) (num 3) (num 2))) (numV 2))
-(test/exn (interp (with (binding 'x (num 1)) (id 'x))) "")
-; This one is from the assignment directions
-(test/exn (interp (app (num 1) (list (num 2)))) "")
-
-; Tests that involve env
-(test/exn (interp (id 'x)) "")
-(test (interp (app (fun '(x) (id 'x)) (list(num 1)))) (numV 1))
-(test (interp (fun '(x) (num 1))) (closureV 'x (num 1) (mtEnv)))
-(test (interp (fun '() (binop + (num 1) (num 1)))) (thunkV (binop + (num 1) (num 1)) (mtEnv) ))
-
-; More complicated tests.
-(test (interp (if0 (num 1) (num 3) (app (fun '(x) (app (fun '(x) (id 'x)) (list(num 2)))) (list(num 1))))) (numV 2))
-(test (interp (fun '(x) (fun '(y) (fun '(!) (binop * (binop + (id 'x) (id 'y)) (id '!)))))) (closureV 'x (fun '(y) (fun '(!) (binop * (binop + (id 'x) (id 'y)) (id '!)))) (mtEnv)))
-(test (interp (app (fun '() (binop + (num 1) (num 1))) empty)) (numV 2))
-(test (interp (app (app (app (fun '(x) (fun '(y) (fun '(!) (binop * (binop + (id 'x) (id 'y)) (id '!))))) (list (num 1))) (list (num 2))) (list (num 3)))) (numV 9))
-
-;;; run tests + error checking
-;;; (assumption: if everything works for parse, pre-process and interp, and one thing works for run, then run should work for everything.)
-(test/exn (run '{/ 1 0}) "")
-(test/exn (run '{{fun {x} 1} 5 2}) "")
-(test (run '{{fun {x y z} {- {- x y} z}} 2 3 4}) (numV -5))
-(test (run '{{fun {x y !} {* {+ x y} !}} 1 2 3}) (numV 9))
 ;; print out failed tests explicity
 "tests failed:"
 (failed-tests)
