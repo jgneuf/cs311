@@ -1,9 +1,13 @@
-module Laziness (divides, isPrime, isPrime2, primes, {-mkTree, mancala, prune, minimax, level-}) where
+module Laziness (divides, isPrime, isPrime2, primes, 
+        mkTree, mancala, prune, minimax, level) 
+        where
 
---import Game
+import Game
 import Test.HUnit
 
+-----------------------------------------------------------------------------------------
 -- PROBLEM 1
+-----------------------------------------------------------------------------------------
 
 -- divides x n is True iff x evenly divides n.
 divides :: Integer -> Integer -> Bool
@@ -41,12 +45,12 @@ isPrime2 n
 
 -- Tests for isPrime2, the same as for isPrime.
 ip2Tests = test [ "isPrime2-1" ~: "(isPrime 2)" ~: (isPrime2 2) ~=? True,
-	       	 "isPrime2-2" ~: "(isPrime2 3)" ~: (isPrime2 3) ~=? True,
-             "isPrime2-3" ~: "(isPrime2 4)" ~: (isPrime2 4) ~=? False,
-             "isPrime2-4" ~: "(isPrime2 5)" ~: (isPrime2 5) ~=? True,
-             "isPrime2-5" ~: "(isPrime2 6)" ~: (isPrime2 6) ~=? False,
-             "isPrime2-6" ~: "(isPrime2 7)" ~: (isPrime2 7) ~=? True,
-             "isPrime2-7" ~: "(isPrime2 8)" ~: (isPrime2 8) ~=? False]
+    "isPrime2-2" ~: "(isPrime2 3)" ~: (isPrime2 3) ~=? True,
+    "isPrime2-3" ~: "(isPrime2 4)" ~: (isPrime2 4) ~=? False,
+    "isPrime2-4" ~: "(isPrime2 5)" ~: (isPrime2 5) ~=? True,
+    "isPrime2-5" ~: "(isPrime2 6)" ~: (isPrime2 6) ~=? False,
+    "isPrime2-6" ~: "(isPrime2 7)" ~: (isPrime2 7) ~=? True,
+    "isPrime2-7" ~: "(isPrime2 8)" ~: (isPrime2 8) ~=? False]
 
 -- integerTake returns a list of length n using the given list. Haskell's take
 -- uses argument of type Int, this takes Integer.
@@ -57,50 +61,57 @@ integerTake n (x:xs) = x : integerTake (n - 1) xs
 
 -- Tests for integerTake.
 myitTests = test [ "integerTake1" ~: "(integerTake 0 [])" ~: (integerTake 0 "") ~=? "",
-	       	 "integerTake2" ~: "(integerTake 0 [1..5])" ~: (integerTake 0 [1..5]) ~=? [],
-             "integerTake3" ~: "(integerTake 2 [1..5])" ~: (integerTake 2 [1..5]) ~=? [1,2],
-             "integerTake4" ~: "(integerTake 5 [1..5])" ~: (integerTake 5 [1..5]) ~=? [1..5],
-             "integerTake5" ~: "(integerTake 10 [2])" ~: (integerTake 10 [2]) ~=? [2]]
+    "integerTake2" ~: "(integerTake 0 [1..5])" ~: (integerTake 0 [1..5]) ~=? [],
+    "integerTake3" ~: "(integerTake 2 [1..5])" ~: (integerTake 2 [1..5]) ~=? [1,2],
+    "integerTake4" ~: "(integerTake 5 [1..5])" ~: (integerTake 5 [1..5]) ~=? [1..5],
+    "integerTake5" ~: "(integerTake 10 [2])" ~: (integerTake 10 [2]) ~=? [2]]
 
-{-
+-----------------------------------------------------------------------------------------
 -- PROBLEM 2
+-----------------------------------------------------------------------------------------
 
--- NOTE: it may be harder to build good test cases here.  Try to do so
--- at least for prune and minimax!
+-- A GameTree instantiation is a node in the game tree. Each node contains the
+-- current state of the game with GameState and a list of GameTree nodes that
+-- can be reached in one legal move. An empty list of GameTrees indicates the
+-- game is over, so the node is a leaf. 
+data GameTree = GameTree GameState [GameTree]
 
--- This is the GameTree datatype you should define.
--- Remember: "Each node should have its current configuration 
--- and a list of trees, where each tree corresponds to the game 
--- states obtainable after making any one legal move."
-data GameTree = []
-
--- mkTree s yields the complete GameTree whose root has state s
+-- mkTree takes a GameState s and produces a GameTree whose root contains s.
+-- The branches of the GameTree contain only the legal moves that can be made
+-- from s.
 mkTree :: GameState -> GameTree
-
+mkTree s
+    | null (nextStates s)   = GameTree s []
+    | otherwise             = GameTree s (map mkTree (nextStates s))
 
 -- mancala is the entire game of mancala as a GameTree.  Note that PlayerA
 -- goes first.
 mancala :: GameTree
+mancala = mkTree (initialState PlayerA) 
 
-
--- prune n gt with n > 0 yields a GameTree equivalent to gt up to depth n,
--- but with no subtrees below depth n.
--- Note: prune 0 gt is nonsense; do not provide an equation for prune 0 gt.
+-- Given a depth n, prune will descend into the tree until the depth is 1.
+-- At this point the tree traversal ends and the GameTree is returned as
+-- a leaf.
 prune :: Int -> GameTree -> GameTree
+prune 0 _  = error "prune to depth 0 is undefined"
+prune 1 (GameTree s _)  = GameTree s []
+prune n (GameTree s ts) = GameTree s (map (prune (n - 1)) ts) 
 
 -- NOTE: you may need to replace "GameTree" in this test with something else
 -- to make it work, depending on how you defined your data type!
 pruneTests = test [ "total-prune" ~: "(prune 1 mancala)" ~: 
-	   (null (case (prune 1 mancala) of GameTree s ts -> ts)) ~=? True ]
+    (null (case (prune 1 mancala) of GameTree [] [] -> [])) ~=? True ]
 
--- minimax gt yields the minimaxed gameValue of the given GameTree.  The value
--- of a node with no children is the gameValue of its GameState.  
--- If the node has children and it's PlayerA's turn, then A can choose the
--- child state with maximum value.  If the node has no children and it's 
--- PlayerB's turn, then B can choose the child state with minimum value.
--- Together, these rules define the value of any (finite) game tree.
+-- Run the minimax algorithm on a given GameTree. Assuming PlayerA is the AI,
+-- descend into the GameTree until a leaf is reached and return the value of
+-- the GameState. At each level, minimax makes a choice by checking whose
+-- turn it is; PlayerA maximizes the GameValue while PlayerB minimizes it.
 minimax :: GameTree -> GameValue
-
+minimax (GameTree s []) = gameValue s
+minimax (GameTree s ts) 
+    | cp == PlayerA = maximum (map minimax ts)
+    | otherwise     = minimum (map minimax ts)
+        where cp = getPlayer s
 
 -- level n simulates a game of mancala such that PlayerA (who goes first) is
 -- controlled by your minimax AI, with n levels of lookahead.  We have written
@@ -108,8 +119,6 @@ minimax :: GameTree -> GameValue
 level :: Int -> IO ()
 level n = simulateAIGame (minimax . (prune n) . mkTree)
 
--}
-
 -- All tests.
-tests = TestList [divTests, ipTests, ip2Tests, myitTests]
+tests = TestList [divTests, ipTests, ip2Tests, myitTests, pruneTests]
 
