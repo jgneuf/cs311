@@ -40,7 +40,11 @@ work.
 
 {rec {fact {fun {n} {if0 n 1 {* n {fact {- n 1}}}}}}
     {fact 10}}
-
+It's not clear what fact is bound to in this case, especially since it's a recursive
+definition. We had enough trouble with complex-computation in the previous piece of
+code, and this is similar. Since fact calls itself, however, we have no idea what n
+is bound to at any point in the program statically, since (in this case) it could be
+[0..10].
 
 5) 
 {with {countdown {fun {n} {if0 n 0 {countdown {- n 1}}}}}
@@ -65,25 +69,70 @@ then subtracting one. So Haskell takes the first element of the mapped expressio
 calls allones with it, then takes the next element of the mapped expression, etc. But
 to evaluate result, Haskell still has to pull each element from the mapped expression.
 
-7)
-{with* {{x 1} {x 2}} {+ x y}}
+7) Using this piece of code:
+{with* {{x 2} {y 1}} {+ {* x x} y}}
 
-A2:
-{f 1 2} -> {{f 1} 2}
+First consider what the preprocessor from assignment 1 does. We convert the with* to
+a series of nested withs according to this rule:
+{with* {{<id1> <ne1>} <rest-of-bindings>} <body>} =>
+    {with {<id1> <ne1>} {with* {<rest-of-bindings>} <body>}}
 
-{fun {x y} {+ x y}} -> {fun {x} {fun {y} {+ x y}}}
+where id1 = x, ne1 = 2, rest-of-bindings = {y 1} and <body> = {+ {* x x} y}}. So,
+initially we get,
+{with {x 2} {with* {{y 1}} {+ {* x x} y}}}
 
-{{ {fun {x} {fun {y} {+ x y}}} 1} 2}
+And the new with* is trivially converted to,
+{with {x 2} {with {y 1} {+ {* x x} y}}}
 
-A1:
-{with* {{x 1} {y 2}} {+ x y}} -> {with {x 1} {with {x 2} {+ x y}}}
+Now we convert this to a function application according to,
+{with {<id> <ne>} <body>} => {{fun {<id>} <body>} <ne>}
 
-{with {x 1} {with {y 2} {+ x y}}} -> {{fun {x} {nested-with}} 1}
+Giving us,
+{{fun {x} <body>} 2}
 
-{{fun {x} {{fun {y} {+ x y}} 2} 1}
+where <body> = {with {y 1} {+ {* x x} y}}. The result of doing the same to body is,
+{{fun {y} {+ {* x x} y}} 1}
+
+For a full result of,
+{{fun {x} {{fun {y} {+ {* x x} y}} 1}} 2}
+
+Now when we interp this, we interp the function body in a new env containing x -> 2.
+Next, we interp the body of the inner function application in an augmented environement
+containing y -> 1. The result is a fairly trivial evaluation of {+ {* x x} y}, which 
+is 5.
+
+Now we look at the rule used for implementing with* in assignment 2. Using the same
+piece of code under:
+{with* {{<id1> <ne1>} ... {<idn> <nen>}} <body>} =>
+    {{fun {<id1> ... <idn>} <body>} <ne1> ... <nen>}
+
+where id1 = x, ne1 = 2, id2 = y, ne2 = 1 and <body> = {+ {* x x} y}. We get,
+{{fun {x y} {+ {* x x} y}} 2 1}
+
+Let's first convert this to a function of one argument,
+{{fun {x} {fun {y} {+ {* x x} y}}} 2 1}
+
+But we have to convert this to function applications of single arguments according to,
+{<fe> <a1> <rest-of-args>} => {{<fe> <a1>} <rest-of-args>}
+
+where a1 = 2, a2 = 1 and <fe> = {fun {x} {fun {y} {+ {* x x} y}}}. So,
+{{{fun {x} {fun {y} {+ {* x x} y}}} 2} 1}
+
+Now we interp the body of the function in an new env containing x -> 1. The body is the
+second function application, and we interp it's body in a new augmented env containing
+y -> 2. The body is trivially evaluated in this environment yielding {+ {* 1 1} 2},
+which is 2.
+
+Because of the order in which functions and function applications are converted to single
+argument functions and function applications, the environments in which they are interped
+will differ in the order of the named expressions. 
+
+I'm not sure how the order got mixed up but 5.1-d on midterm 1 has a similar situation
+in which each argument was evaluated in the same environment, whereas here they are
+evaluated in different environments. 
 
 8) {rec ...} and the Y Combinator gave meaning to Paul Graham's essays and startup
 incubator. He's a strong advocate of Lisp(s) and the more function programming I do
 I start to see why more and more. It's amazing how much you can do with such a small
-set of features in a language. Also, RIP John McCarthy.
+set of features in a language. Also, RIP Dennis Ritchie and John McCarthy.
 
