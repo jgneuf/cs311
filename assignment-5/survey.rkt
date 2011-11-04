@@ -7,12 +7,13 @@
 ;; this information in. If they change their response, we simply continue the survey from the
 ;; environment they are working in at that time.
 (define-type Closure
+  [closureN (question string?) (answer number?) (context Env?)]
   [closureS (question string?) (answer string?) (context Env?)])
 
 ;; An environment stores the data the user answered for a particular question as well as
 ;; a list of environments. This enables us to store a list of questions, i.e. all the
-;; questions the user has answered, and the context it was answered in. The continuation aspect 
-;;is stored in the closure itself, which holds the current environment. That way if we go back 
+;; questions the user has answered, and the context it was answered in. The continuation aspect
+;;is stored in the closure itself, which holds the current environment. That way if we go back
 ;;to another question we simply do a lookup to grab the closure and build on its environment.
 (define-type Env
   [mtEnv]
@@ -26,19 +27,27 @@
 ;; Associate each question (the string) with a question number. When lookup-question is given
 ;; the question number it returns the associated string, i.e. the actual question.
 (define (lookup-question key)
-  (cond 
+  (cond
     [(= key 1) "Are you planning to travel soon?"]
     [(= key 2) "What country are you planning to travel?"]
     [(= key 3) "Are you also interested in travelling to Italy?"]
     [(= key 4) "How many people are accompanying you?"]
-    [(= key 5) "We offer 30% discount for those traveling with 4 or more people to Italy. 
+    [(= key 5) "We offer 30% discount for those traveling with 4 or more people to Italy.
                 Are you Interested?"]
-    [(= key 6) "We offer Basic Saving Plan of 5% discount for people travelling in groups. 
-                This is your promote code:"]
+    [(= key 6) "We offer Basic Saving Plan of 5% discount for people travelling in groups.
+               This is your promote code:"]
     [(= key 7) "Would you like to subscribe to our news letter?"]
     [else (error 'lookup-question "Expect argument 1 through 7, got ~a" key)]))
 
-;; send-and-get : number, environement -> 
+;; lookup-answer : environment -> string/number
+(define (lookup-answer environment question)
+  (cond
+    [(mtEnv? environment) (error 'lookup-answer "Question has not been answered: ~a" question)]
+    [(equal? question (closureS-question (env-data environment)))
+     (closureS-answer (env-data environment))]
+    [else (lookup-answer (closureS-context (env-data environment)) question)] ))
+
+;; send-and-get : number, environement ->
 ;; Take a number, which is the question to ask, and an environment. We get the question string
 ;; associated with the question number and create a page that asks the user the question via
 ;; make-request-page. The answer is parsed out of the bindings and we create a closure with it.
@@ -50,15 +59,50 @@
           [define request  (send/suspend (make-request-page question))]
           [define bindings (request-bindings request)]
           [define answer   (extract-binding/single 'ans bindings)]
-          [define closure  (closureS question answer cenv)])
-    (cond 
+          [define closure  (if (= q 4)
+                               (closureN question (string->number answer) cenv)
+                               (closureS question answer cenv))]) ;; TODO: answer is random
+    (cond
+      ;; If user answers yes we send them to question 2, else question 7.
       [(= q 1) (if (equal? "Yes" answer)
                    (send-and-get 2 (env closure cenv))
                    (send-and-get 7 (env closure cenv)))]
-      [else (send/suspend (make-result-page (env closure cenv)))])))
+      
+      ;; If user answers Italy we send them to question 4, else question 3.
+      [(= q 2) (if (equal? "Italy" answer)
+                   (send-and-get 4 (env closure cenv))
+                   (send-and-get 3 (env closure cenv)))]
+      
+      ;; Always send the user to question 4.
+      [(= q 3) (send-and-get 4 (env closure cenv))]
+      
+      ;; Depending on what user answers and what they answered for questions 2 and 3,
+      ;; send user to question 5, 6 or 7.
+      [(= q 4) (cond
+                 [(and (> (string->number answer) 3) 
+                       (or 
+                        (equal? (lookup-answer (closureN-context closure) (lookup-question 2)) "Italy")
+                        (equal? (lookup-answer (closureN-context closure) (lookup-question 3)) "Yes")))
+                  (send-and-get 5 (env closure cenv))]
+                 [(> (string->number answer) 0)
+                  (send-and-get 6 (env closure cenv))]
+                 [else
+                  (send-and-get 7 (env closure cenv))] )]
+      
+      ;; Always send user to question 7.
+      [(= q 5) (send-and-get 7 (env closure cenv))]
+      
+      ;; Always send user to question 7.
+      [(= q 6) (send-and-get 7 (env closure cenv))]
+      
+      ;; Last question, print results after this.
+      [(= q 7 (send/suspend (make-result-page (env closure cenv))))]
+      
+      ;; I'm not sure how anyone could get here, but it's probably good to have this.
+      [else ('error "send-and-get got question ~a, expected 1 through 7." q)] )))
 
-;; make-result-page : environment -> 
-;; After question 7, print out the survey results contained in the given environment. Each 
+;; make-result-page : environment ->
+;; After question 7, print out the survey results contained in the given environment. Each
 ;; question and answer the user gave is stored in the environment, so we use a helper function
 ;; to grab each pair and put it on the page.
 (define (make-result-page allEnvs)
@@ -67,20 +111,24 @@
                       (body
                        (h1 "Survey Result:")
                        (br)
-                       ,(first (format-result allEnvs)))))))
+                       ,(format-result allEnvs))))))
 
 ;; format-result : environment -> string
-;; Append isn't working right, we also tried cons but that gave back a list.
+;; ???
 (define (format-result allEnvs)
   (if (mtEnv? allEnvs)
-      '()
+      '(p)
       (local ([define curClosure (env-data allEnvs)]
               [define restEnvs   (env-environment allEnvs)]
-              [define question   (closureS-question curClosure)]
-              [define answer     (closureS-answer curClosure)])
-        (cons (format-result restEnvs) `(p ,question (br) ,answer)))))
+              [define question   (type-case Closure curClosure
+                                   [closureS (q a e) q]
+                                   [closureN (q a e) q])]
+              [define answer     (type-case Closure curClosure
+                                   [closureS (q a e) a]
+                                   [closureN (q a e) (number->string a)])])
+        `(cons ,(format-result restEnvs) (div ,question (br) ,answer)))))
 
-;; make-request-page : string -> 
+;; make-request-page : string ->
 ;; Create a page that asks the user for their answer given a question.
 (define (make-request-page question)
   (lambda (k-url)
@@ -89,8 +137,8 @@
                        (form ((action ,k-url) (method "post"))
                              (h2 ,question)
                              (input ((type "text") (name "ans")))
-                             (input ((type "submit") 
-                                     (name "submit") 
+                             (input ((type "submit")
+                                     (name "submit")
                                      (value "Submit")))))))))
 
 ;; Start the server.
