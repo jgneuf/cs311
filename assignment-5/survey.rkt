@@ -2,12 +2,11 @@
 (require web-server/servlet
          web-server/servlet-env)
 
-;; When a user enters an answer to a question, we store the question and the user's iput in a
+;; When a user enters an answer to a question, we store the question and the user's input in a
 ;; closure. Since they may come back to this page we also store the environment they entered
 ;; this information in. If they change their response, we simply continue the survey from the
 ;; environment they are working in at that time.
 (define-type Closure
-  [closureN (question string?) (answer number?) (context Env?)]
   [closureS (question string?) (answer string?) (context Env?)])
 
 ;; An environment stores the data the user answered for a particular question as well as
@@ -58,10 +57,8 @@
   (local ([define question (lookup-question q)]
           [define request  (send/suspend (make-request-page question))]
           [define bindings (request-bindings request)]
-          [define answer   (extract-binding/single 'ans bindings)]
-          [define closure  (if (= q 4)
-                               (closureN question (string->number answer) cenv)
-                               (closureS question answer cenv))]) ;; TODO: answer is random
+          [define answer (extract-binding/single 'ans bindings)]
+          [define closure  (closureS question answer cenv)]) ;; TODO: answer is random
     (cond
       ;; If user answers yes we send them to question 2, else question 7.
       [(= q 1) (if (equal? "Yes" answer)
@@ -69,20 +66,24 @@
                    (send-and-get 7 (env closure cenv)))]
       
       ;; If user answers Italy we send them to question 4, else question 3.
-      [(= q 2) (if (equal? "Italy" answer)
-                   (send-and-get 4 (env closure cenv))
-                   (send-and-get 3 (env closure cenv)))]
-      
+      [(= q 2) (if (equal? answer "") 
+                   (send/suspend (make-error-page "Invalid Answer: You did not answer the question. Example: Italy, Vancouver, etc."))
+                   (if (equal? "Italy" answer)
+                       (send-and-get 4 (env closure cenv))
+                       (send-and-get 3 (env closure cenv))))]
       ;; Always send the user to question 4.
       [(= q 3) (send-and-get 4 (env closure cenv))]
       
       ;; Depending on what user answers and what they answered for questions 2 and 3,
       ;; send user to question 5, 6 or 7.
       [(= q 4) (cond
+                 [(equal? answer "") (send/suspend (make-error-page "Invalid Answer: You did not provide a number. Example: 1, 2, 500, etc."))]
+                 [(not (integer? (string->number answer))) (send/suspend (make-error-page "Invalid Answer: You cannot take a portion of a person. Examples: 1, 2, 500, etc."))]
+                 [(< (string->number answer) 0) (send/suspend (make-error-page "Invalid Answer: You cannot give a negative answer. Examples: 1, 2, 500, etc."))]
                  [(and (> (string->number answer) 3) 
                        (or 
-                        (equal? (lookup-answer (closureN-context closure) (lookup-question 2)) "Italy")
-                        (equal? (lookup-answer (closureN-context closure) (lookup-question 3)) "Yes")))
+                        (equal? (lookup-answer (closureS-context closure) (lookup-question 2)) "Italy")
+                        (equal? (lookup-answer (closureS-context closure) (lookup-question 3)) "Yes")))
                   (send-and-get 5 (env closure cenv))]
                  [(> (string->number answer) 0)
                   (send-and-get 6 (env closure cenv))]
@@ -110,8 +111,19 @@
     (response/xexpr `(html
                       (body
                        (h1 "Survey Result:")
-                       (br)
                        ,(format-result allEnvs))))))
+
+;; make-error-page
+;; If the user types in an inapproriate answer, for example a negative number in question 4, this
+;; error would occur.
+(define (make-error-page msg)
+  (local ([define backlink "javascript:history.back()"])
+  (lambda (k-url)
+    (response/xexpr `(html
+                      (body
+                       (h1 "ERROR:")
+                       (p ,msg)
+                       (a ([href ,backlink]) "Back")))))))
 
 ;; format-result : environment -> string
 ;; ???
@@ -120,26 +132,54 @@
       '(p)
       (local ([define curClosure (env-data allEnvs)]
               [define restEnvs   (env-environment allEnvs)]
-              [define question   (type-case Closure curClosure
-                                   [closureS (q a e) q]
-                                   [closureN (q a e) q])]
-              [define answer     (type-case Closure curClosure
-                                   [closureS (q a e) a]
-                                   [closureN (q a e) (number->string a)])])
+              [define question   (closureS-question curClosure)]
+              [define answer     (closureS-answer curClosure)])
         `(cons ,(format-result restEnvs) (div ,question (br) ,answer)))))
 
 ;; make-request-page : string ->
 ;; Create a page that asks the user for their answer given a question.
 (define (make-request-page question)
-  (lambda (k-url)
-    (response/xexpr `(html
-                      (body
-                       (form ((action ,k-url) (method "post"))
-                             (h2 ,question)
-                             (input ((type "text") (name "ans")))
-                             (input ((type "submit")
-                                     (name "submit")
-                                     (value "Submit")))))))))
+  
+  (cond 
+    [(equal? (lookup-question 6) question)
+     (local ([define promoCode (number->string (random 99999))])
+     (lambda (k-url)
+       (response/xexpr `(html
+                         (body
+                          (form ((action ,k-url) (method "post"))
+                                (h2 ,question)
+                                (p ,promoCode)
+                                (input ((type "hidden")
+                                        (name "ans")
+                                        (value ,promoCode)))
+                                (input ((type "submit")
+                                        (name "submit")
+                                        (value "Next")))))))))]
+    [(or (equal? (lookup-question 1) question) 
+         (equal? (lookup-question 3) question) 
+         (equal? (lookup-question 5) question)
+         (equal? (lookup-question 7) question)) 
+     (lambda (k-url)
+       (response/xexpr `(html
+                         (body
+                          (form ((action ,k-url) (method "post"))
+                                (h2 ,question)
+                                (input ((type "radio") (name "ans") (value "Yes"))) "Yes"
+                                (br)
+                                (input ((type "radio") (name "ans") (value "No"))) "No"
+                                (br)
+                                (input ((type "submit")
+                                        (name "submit")
+                                        (value "Submit"))))))))]
+    [else (lambda (k-url)
+            (response/xexpr `(html
+                              (body
+                               (form ((action ,k-url) (method "post"))
+                                     (h2 ,question)
+                                     (input ((type "text") (name "ans")))
+                                     (input ((type "submit")
+                                             (name "submit")
+                                             (value "Submit"))))))))]))
 
 ;; Start the server.
 (serve/servlet start)
