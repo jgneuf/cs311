@@ -1,3 +1,9 @@
+;; ----------------------------------------------------------------------------------------------------
+;; Student Name: Jonathan Neufeld
+;; Student Number: 30671093
+;; CS ID: p9d8
+;; ----------------------------------------------------------------------------------------------------
+
 #lang plai
 (require web-server/servlet
          web-server/servlet-env)
@@ -34,11 +40,11 @@
     [(= key 5) "We offer 30% discount for those traveling with 4 or more people to Italy.
                 Are you Interested?"]
     [(= key 6) "We offer Basic Saving Plan of 5% discount for people travelling in groups.
-               This is your promote code:"]
+                This is your promote code:"]
     [(= key 7) "Would you like to subscribe to our news letter?"]
-    [else (error 'lookup-question "Expect argument 1 through 7, got ~a" key)]))
+    [else (error 'lookup-question "Expect argument 1 through 7, got ~a" key)] ))
 
-;; lookup-answer : environment -> string/number
+;; lookup-answer : environment, string -> string
 (define (lookup-answer environment question)
   (cond
     [(mtEnv? environment) (error 'lookup-answer "Question has not been answered: ~a" question)]
@@ -46,7 +52,7 @@
      (closureS-answer (env-data environment))]
     [else (lookup-answer (closureS-context (env-data environment)) question)] ))
 
-;; send-and-get : number, environement ->
+;; send-and-get : number, environement -> (makes a page)
 ;; Take a number, which is the question to ask, and an environment. We get the question string
 ;; associated with the question number and create a page that asks the user the question via
 ;; make-request-page. The answer is parsed out of the bindings and we create a closure with it.
@@ -57,8 +63,8 @@
   (local ([define question (lookup-question q)]
           [define request  (send/suspend (make-request-page question))]
           [define bindings (request-bindings request)]
-          [define answer (extract-binding/single 'ans bindings)]
-          [define closure  (closureS question answer cenv)]) ;; TODO: answer is random
+          [define answer   (extract-binding/single 'ans bindings)]
+          [define closure  (closureS question answer cenv)])
     (cond
       ;; If user answers yes we send them to question 2, else question 7.
       [(= q 1) (if (equal? "Yes" answer)
@@ -67,19 +73,23 @@
       
       ;; If user answers Italy we send them to question 4, else question 3.
       [(= q 2) (if (equal? answer "") 
-                   (send/suspend (make-error-page "Invalid Answer: You did not answer the question. Example: Italy, Vancouver, etc."))
+                   (send/suspend (make-error-page "You didn't answer the question. Try, 'Italy'."))
                    (if (equal? "Italy" answer)
                        (send-and-get 4 (env closure cenv))
                        (send-and-get 3 (env closure cenv))))]
+      
       ;; Always send the user to question 4.
       [(= q 3) (send-and-get 4 (env closure cenv))]
       
       ;; Depending on what user answers and what they answered for questions 2 and 3,
       ;; send user to question 5, 6 or 7.
       [(= q 4) (cond
-                 [(equal? answer "") (send/suspend (make-error-page "Invalid Answer: You did not provide a number. Example: 1, 2, 500, etc."))]
-                 [(not (integer? (string->number answer))) (send/suspend (make-error-page "Invalid Answer: You cannot take a portion of a person. Examples: 1, 2, 500, etc."))]
-                 [(< (string->number answer) 0) (send/suspend (make-error-page "Invalid Answer: You cannot give a negative answer. Examples: 1, 2, 500, etc."))]
+                 [(equal? answer "") (send/suspend (make-error-page "You didn't answer the question.
+                   Try, '2'."))]
+                 [(not (integer? (string->number answer))) (send/suspend (make-error-page "You didn't
+                   provide a integer. Try, '2'."))]
+                 [(< (string->number answer) 0) (send/suspend (make-error-page "You didn't provide
+                   a positive number. Try, '2'."))]
                  [(and (> (string->number answer) 3) 
                        (or 
                         (equal? (lookup-answer (closureS-context closure) (lookup-question 2)) "Italy")
@@ -102,7 +112,7 @@
       ;; I'm not sure how anyone could get here, but it's probably good to have this.
       [else ('error "send-and-get got question ~a, expected 1 through 7." q)] )))
 
-;; make-result-page : environment ->
+;; make-result-page : environment -> (makes a page)
 ;; After question 7, print out the survey results contained in the given environment. Each
 ;; question and answer the user gave is stored in the environment, so we use a helper function
 ;; to grab each pair and put it on the page.
@@ -110,23 +120,27 @@
   (lambda (k-url)
     (response/xexpr `(html
                       (body
-                       (h1 "Survey Result:")
+                       (h1 "Survey Results:")
                        ,(format-result allEnvs))))))
 
-;; make-error-page
+;; make-error-page : string -> (makes a page)
 ;; If the user types in an inapproriate answer, for example a negative number in question 4, this
-;; error would occur.
+;; error would occur. The message sent here gives some guidance to the user on what mistake they made,
+;; and we provide a back button so they can re-enter their answer.
 (define (make-error-page msg)
   (local ([define backlink "javascript:history.back()"])
-  (lambda (k-url)
-    (response/xexpr `(html
-                      (body
-                       (h1 "ERROR:")
-                       (p ,msg)
-                       (a ([href ,backlink]) "Back")))))))
+    (lambda (k-url)
+      (response/xexpr `(html
+                        (body
+                         (h1 "Oops!")
+                         (p ,msg)
+                         (a ([href ,backlink]) "Back")))))))
 
-;; format-result : environment -> string
-;; ???
+;; format-result : environment -> (listof string)
+;; When the survey is complete, make-result-page gives this function the final environment containing
+;; each question and answer. This grabs the question and answer strings and puts them into a div element
+;; for display on the final page. There are multiple questions/answers, of course, so we do this
+;; recursively, returning a list of strings.
 (define (format-result allEnvs)
   (if (mtEnv? allEnvs)
       '(p)
@@ -136,25 +150,30 @@
               [define answer     (closureS-answer curClosure)])
         `(cons ,(format-result restEnvs) (div ,question (br) ,answer)))))
 
-;; make-request-page : string ->
-;; Create a page that asks the user for their answer given a question.
+;; make-request-page : string -> (makes a page)
+;; Create a page that asks the user for their answer given a question. This takes the question to ask
+;; and display a page appropriate to answer the question i.e. text input or radio button.
 (define (make-request-page question)
-  
-  (cond 
+  (cond
+    
+    ;; Generate a random promotion code. We display the code and create a hidden field in an HTML
+    ;; form to give it back to the calling page, so we can store that code.
     [(equal? (lookup-question 6) question)
      (local ([define promoCode (number->string (random 99999))])
-     (lambda (k-url)
-       (response/xexpr `(html
-                         (body
-                          (form ((action ,k-url) (method "post"))
-                                (h2 ,question)
-                                (p ,promoCode)
-                                (input ((type "hidden")
-                                        (name "ans")
-                                        (value ,promoCode)))
-                                (input ((type "submit")
-                                        (name "submit")
-                                        (value "Next")))))))))]
+       (lambda (k-url)
+         (response/xexpr `(html
+                           (body
+                            (form ((action ,k-url) (method "post"))
+                                  (h2 ,question)
+                                  (p ,promoCode)
+                                  (input ((type "hidden")
+                                          (name "ans")
+                                          (value ,promoCode)))
+                                  (input ((type "submit")
+                                          (name "submit")
+                                          (value "Next")))))))))]
+    
+    ;; Questions 1, 3, 5, and 7 require radio buttons. The actual value is either "Yes" or "No".
     [(or (equal? (lookup-question 1) question) 
          (equal? (lookup-question 3) question) 
          (equal? (lookup-question 5) question)
@@ -171,6 +190,8 @@
                                 (input ((type "submit")
                                         (name "submit")
                                         (value "Submit"))))))))]
+    
+    ;; Get the user's input via text input.
     [else (lambda (k-url)
             (response/xexpr `(html
                               (body
@@ -183,3 +204,17 @@
 
 ;; Start the server.
 (serve/servlet start)
+
+;; ----------------------------------------------------------------------------------------------------
+;; Some tests.
+;; ----------------------------------------------------------------------------------------------------
+(display "Server side tests:\n")
+
+(test (lookup-question 1) "Are you planning to travel soon?")
+(test (lookup-question 7) "Would you like to subscribe to our news letter?")
+(test/exn (lookup-question 8) "")
+
+(test/exn (lookup-answer (mtEnv) "Are you planning to travel soon?") "")
+(test (lookup-answer 
+       (env (closureS "Are you planning to travel soon?" "Yes" (mtEnv)) (mtEnv))
+       "Are you planning to travel soon?") "Yes")

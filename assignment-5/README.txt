@@ -8,7 +8,6 @@ CS ID: c0x6
 
 "I have read and complied with the collaboration policy."
 
-
 1. When we clone a tab we create a clone of the global hash table and bring it along 
 with us. Then when we go back to answer the first question we set the first element in
 the hash table to "No". The web app will then send us to the last question -- but we're
@@ -38,3 +37,16 @@ board) was interesting. It makes me want to try Ruby/on Rails, Python/Django or
 Scala/Lift.
 
 Bonus: There's some nice error checking on our web app.
+
+Testing:
+Simple tests where we answer the questions without duplicating tabs or pressing the back
+button perform as expected; entering 'Yes' then 'Yes' will display both those answers to
+their respective questions. There's nothing fancy here.
+
+If we answer 'Yes' to the first question, 'Italy' to the second then duplicate the tab
+a few times, we can do more interesting testing. In one tab we can go back to the first
+question and answer 'No', then answer 'No' again on the last question. This will result in
+the answers 'No' and 'No' on the results page. These answers will have no effect on the
+other tabs still open. Moreover, taking turns between answering questions in two different
+tabs will still produce a reliable output on the final screen.
+
