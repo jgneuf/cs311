@@ -15,6 +15,16 @@
 (define-type Closure
   [closureS (question string?) (answer string?) (context Env?)])
 
+;; Box up the promotion code. This needs to be global, since even if a user backtracks out of
+;; question 6, we need to display the promotion code (as per the requirements). This value is
+;; set when the page for question 6 is viewed, generating the promotion code for that user.
+(define promoCode (box "-1"))
+
+;; setPromoCode : string -> void
+;; When a user views page 6 we set promoCode to the randomly generated value. 
+(define (setPromoCode p) 
+  (set-box! promoCode p))
+
 ;; An environment stores the data the user answered for a particular question as well as
 ;; a list of environments. This enables us to store a list of questions, i.e. all the
 ;; questions the user has answered, and the context it was answered in. The continuation aspect
@@ -63,7 +73,12 @@
   (local ([define question (lookup-question q)]
           [define request  (send/suspend (make-request-page question))]
           [define bindings (request-bindings request)]
-          [define answer   (extract-binding/single 'ans bindings)]
+          
+          ;; Check to see if the user answered a radio button. If they didn't, send them to an
+          ;; error page.
+          [define answer   (if (exists-binding? 'ans bindings)
+                               (extract-binding/single 'ans bindings)
+                               (send/suspend (make-error-page "You didn't answer the question.")))]
           [define closure  (closureS question answer cenv)])
     (cond
       ;; If user answers yes we send them to question 2, else question 7.
@@ -104,7 +119,7 @@
       [(= q 5) (send-and-get 7 (env closure cenv))]
       
       ;; Always send user to question 7.
-      [(= q 6) (send-and-get 7 (env closure cenv))]
+      [(= q 6) (send-and-get 7 cenv)]
       
       ;; Last question, print results after this.
       [(= q 7 (send/suspend (make-result-page (env closure cenv))))]
@@ -121,7 +136,11 @@
     (response/xexpr `(html
                       (body
                        (h1 "Survey Results:")
-                       ,(format-result allEnvs))))))
+                       ,(format-result allEnvs)
+                       ,(if (equal? (unbox promoCode) "-1")
+                            `(br)
+                            `(p "Don't forget about your promotion code! It's:"
+                                (br) (b) ,(unbox promoCode))))))))
 
 ;; make-error-page : string -> (makes a page)
 ;; If the user types in an inapproriate answer, for example a negative number in question 4, this
@@ -159,7 +178,8 @@
     ;; Generate a random promotion code. We display the code and create a hidden field in an HTML
     ;; form to give it back to the calling page, so we can store that code.
     [(equal? (lookup-question 6) question)
-     (local ([define promoCode (number->string (random 99999))])
+     (local ([define promoCode (number->string (random 99999))]
+             [define ignore    (setPromoCode promoCode)])
        (lambda (k-url)
          (response/xexpr `(html
                            (body
